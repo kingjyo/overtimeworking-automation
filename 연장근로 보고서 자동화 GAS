@@ -1,0 +1,246 @@
+// 제주사업부 연장근로 보고서 자동화 스크립트
+
+// 설정값
+const CONFIG = {
+  SPREADSHEET_ID: '1cLzzp3bJjsc4f8tbQUoYeakeDhxodyuLQ48DucYEIdo', // 비교분석 시스템 스프레드시트 ID
+  TEMPLATE_DOC_ID: '1W52lxo5T1I7Y_i89lWGx4omnluN18yVhQPdlvWZ8vKg', // 템플릿 문서 ID
+  OUTPUT_FOLDER_ID: '18sjRrqSgtBQSWMy_GNfkng3ljnY0kKcE', // 생성된 문서를 저장할 폴더 ID
+  SHEET_NAME: '총 정리 표'
+};
+
+// 메인 함수: 연장근로 보고서 생성
+function generateOvertimeReport() {
+  try {
+    // 스프레드시트 데이터 가져오기
+    const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+    const sheet = spreadsheet.getSheetByName(CONFIG.SHEET_NAME);
+    
+    if (!sheet) {
+      throw new Error('총 정리 표 시트를 찾을 수 없습니다.');
+    }
+    
+    // 필요한 데이터 추출
+    const data = extractData(sheet);
+    
+    // 템플릿 복사
+    const templateDoc = DriveApp.getFileById(CONFIG.TEMPLATE_DOC_ID);
+    const folder = DriveApp.getFolderById(CONFIG.OUTPUT_FOLDER_ID);
+    const fileName = `제주사업부 연장근로 ${data.year}년 ${data.currentMonth}월 실적 및 ${data.nextMonth}월 계획 통보`;
+    const newDoc = templateDoc.makeCopy(fileName, folder);
+    
+    // 문서 열기 및 데이터 입력
+    const doc = DocumentApp.openById(newDoc.getId());
+    const body = doc.getBody();
+    
+    // 데이터 치환
+    replaceData(body, data);
+    
+    // 문서 저장
+    doc.saveAndClose();
+    
+    // 성공 메시지 및 링크 표시
+    const docUrl = newDoc.getUrl();
+    const htmlOutput = HtmlService.createHtmlOutput(`
+      <div style="padding: 20px; font-family: 'Noto Sans KR', sans-serif;">
+        <h3 style="color: #1a73e8;">✅ 보고서 생성 완료!</h3>
+        <p>연장근로 보고서가 성공적으로 생성되었습니다.</p>
+        <p><strong>문서명:</strong> ${fileName}</p>
+        <p><a href="${docUrl}" target="_blank" style="display: inline-block; margin-top: 10px; padding: 10px 20px; background-color: #1a73e8; color: white; text-decoration: none; border-radius: 5px;">📄 문서 열기</a></p>
+      </div>
+    `)
+    .setWidth(400)
+    .setHeight(200);
+    
+    SpreadsheetApp.getUi().showModalDialog(htmlOutput, '보고서 생성 완료');
+    
+  } catch (error) {
+    SpreadsheetApp.getUi().alert('❌ 오류 발생: ' + error.toString());
+  }
+}
+
+// 데이터 추출 함수
+function extractData(sheet) {
+  const data = {};
+  
+  // 기본 날짜 정보
+  data.year = sheet.getRange('D1').getValue(); // 기준 년도
+  data.currentMonth = sheet.getRange('F1').getValue(); // 기준 월
+  data.nextMonth = parseInt(data.currentMonth) + 1; // 다음 월
+  if (data.nextMonth > 12) {
+    data.nextMonth = 1;
+  }
+  
+  // 총 연장근로 시간
+  data.totalHours = sheet.getRange('B6').getValue();
+  
+  // 연장근로 실적 표 (B4:F6)
+  data.overtimeTable = sheet.getRange('B4:F6').getValues();
+  
+  // 제동목장 증감 계산
+  const jedongCurrent = sheet.getRange('B4').getValue();
+  const jedongPrevMonth = sheet.getRange('C4').getValue();
+  const jedongPrevYear = sheet.getRange('D4').getValue();
+  
+  data.jedongMonthDiff = Math.abs(jedongCurrent - jedongPrevMonth);
+  data.jedongMonthTrend = jedongCurrent > jedongPrevMonth ? '증가' : '감소';
+  
+  data.jedongYearDiff = Math.abs(jedongCurrent - jedongPrevYear);
+  data.jedongYearTrend = jedongCurrent > jedongPrevYear ? '증가' : '감소';
+  
+  // 생수공장 증감 계산
+  const waterCurrent = sheet.getRange('B5').getValue();
+  const waterPrevMonth = sheet.getRange('C5').getValue();
+  const waterPrevYear = sheet.getRange('D5').getValue();
+  
+  data.waterMonthDiff = Math.abs(waterCurrent - waterPrevMonth);
+  data.waterMonthTrend = waterCurrent > waterPrevMonth ? '증가' : '감소';
+  
+  data.waterYearDiff = Math.abs(waterCurrent - waterPrevYear);
+  data.waterYearTrend = waterCurrent > waterPrevYear ? '증가' : '감소';
+  
+  // 생수공장 연장근로 증감내역 표 (C10:G19)
+  data.waterProductionTable = sheet.getRange('C10:G19').getValues();
+  
+  // 다음 월 계획 표 (K12:R14)
+  data.nextMonthPlanTable = sheet.getRange('K12:R14').getValues();
+  
+  // 추가 계획 정보
+  data.birthPlanHeads = sheet.getRange('O12').getValue(); // 분만 계획 두수
+  const jedongPlanCurrent = sheet.getRange('M12').getValue();
+  const jedongPlanPrev = sheet.getRange('K12').getValue();
+  data.jedongPlanTrend = jedongPlanCurrent > jedongPlanPrev ? '증가' : '감소';
+  
+  data.waterProductionDiff = sheet.getRange('O13').getValue(); // 생산량 차이
+  const waterPlanCurrent = sheet.getRange('M13').getValue();
+  const waterPlanPrev = sheet.getRange('K13').getValue();
+  data.waterPlanTrend = waterPlanCurrent > waterPlanPrev ? '증가' : '감소';
+  
+  return data;
+}
+
+// 데이터 치환 함수
+function replaceData(body, data) {
+  let text = body.getText();
+  
+  // 제목 부분 치환
+  text = text.replace(/2025년 \( \)월 제주사업부 연장근로 실적 및 \( \)월 계획/, 
+    `2025년 ${data.currentMonth}월 제주사업부 연장근로 실적 및 ${data.nextMonth}월 계획`);
+  
+  // 1. 연장근로 실적
+  text = text.replace(/\*\*1\. \( \)월 연장근로 실적 : \( \)시간\*\*/, 
+    `**1. ${data.currentMonth}월 연장근로 실적 : ${data.totalHours}시간**`);
+  
+  // 제동목장 증감내역
+  text = text.replace(/1\) 전월 대비 : \( \)시간 \( \)/, 
+    `1) 전월 대비 : ${data.jedongMonthDiff}시간 ${data.jedongMonthTrend}`);
+  
+  text = text.replace(/2\) 전년 대비 : \( \)시간 \( \)/, 
+    `2) 전년 대비 : ${data.jedongYearDiff}시간 ${data.jedongYearTrend}`);
+  
+  // 생수공장 증감내역
+  const waterMonthText = `1) 전월 대비 : ${data.waterMonthDiff}시간 ${data.waterMonthTrend}`;
+  const waterYearText = `2) 전년 대비 : ${data.waterYearDiff}시간 ${data.waterYearTrend}`;
+  
+  // 텍스트 치환 대신 직접 찾아서 바꾸기
+  body.replaceText('1\\) 전월 대비 : \\( \\)시간 \\( \\)', waterMonthText);
+  body.replaceText('2\\) 전년 대비 : \\( \\)시간 증가', waterYearText);
+  
+  // 2. 연장근로 계획
+  body.replaceText('\\*\\*2\\. 25년 \\( \\)월 연장근로 계획\\*\\*', 
+    `**2. 25년 ${data.nextMonth}월 연장근로 계획**`);
+  
+  // 제동목장 계획
+  body.replaceText('25년 \\( \\)월 제동목장 송아지 분만 계획 두수', 
+    `25년 ${data.nextMonth}월 제동목장 송아지 분만 계획 두수`);
+  
+  body.replaceText('전월 대비 분만 두수 \\( \\)두 \\( \\)에 따른 연장시간 \\( \\) 예상', 
+    `전월 대비 분만 두수 ${data.birthPlanHeads}두 ${data.jedongPlanTrend}에 따른 연장시간 ${data.jedongPlanTrend} 예상`);
+  
+  // 생수공장 계획
+  body.replaceText('전월대비 제품 생산량 \\( \\)톤 \\( \\) 계획으로 연장 시간 \\( \\) 예상', 
+    `전월대비 제품 생산량 ${data.waterProductionDiff}톤 ${data.waterPlanTrend} 계획으로 연장 시간 ${data.waterPlanTrend} 예상`);
+  
+  // 첨부
+  body.replaceText('첨 부 : 2025년 \\( \\)월 제주사업부 연장근로 현황', 
+    `첨 부 : 2025년 ${data.currentMonth}월 제주사업부 연장근로 현황`);
+  
+  // 표 데이터 업데이트
+  updateTables(body, data);
+}
+
+// 표 데이터 업데이트 함수
+function updateTables(body, data) {
+  const tables = body.getTables();
+  
+  if (tables.length >= 3) {
+    // 첫 번째 표: 연장근로 실적 표
+    const overtimeTable = tables[0];
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 5; j++) {
+        const cellValue = data.overtimeTable[i][j];
+        if (cellValue !== undefined && cellValue !== null && cellValue !== '') {
+          overtimeTable.getCell(i + 1, j + 1).setText(String(cellValue));
+        }
+      }
+    }
+    
+    // 두 번째 표: 생수공장 연장근로 증감내역 표
+    const waterTable = tables[1];
+    for (let i = 0; i < 10; i++) {
+      for (let j = 0; j < 5; j++) {
+        const cellValue = data.waterProductionTable[i][j];
+        if (cellValue !== undefined && cellValue !== null && cellValue !== '') {
+          waterTable.getCell(i + 1, j + 2).setText(String(cellValue));
+        }
+      }
+    }
+    
+    // 세 번째 표: 다음 월 계획 표
+    const planTable = tables[2];
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 8; j++) {
+        const cellValue = data.nextMonthPlanTable[i][j];
+        if (cellValue !== undefined && cellValue !== null && cellValue !== '') {
+          planTable.getCell(i + 1, j + 1).setText(String(cellValue));
+        }
+      }
+    }
+  }
+}
+
+// 설정 화면 표시
+function showSettings() {
+  const htmlOutput = HtmlService.createHtmlOutput(`
+    <div style="padding: 20px; font-family: 'Noto Sans KR', sans-serif;">
+      <h3>⚙️ 현재 설정</h3>
+      <p><strong>스프레드시트 ID:</strong><br>${CONFIG.SPREADSHEET_ID}</p>
+      <p><strong>템플릿 문서 ID:</strong><br>${CONFIG.TEMPLATE_DOC_ID}</p>
+      <p><strong>저장 폴더 ID:</strong><br>${CONFIG.OUTPUT_FOLDER_ID}</p>
+      <hr>
+      <p style="color: #666; font-size: 12px;">
+        * 설정을 변경하려면 스크립트 편집기에서 CONFIG 객체를 수정하세요.
+      </p>
+    </div>
+  `)
+  .setWidth(400)
+  .setHeight(300);
+  
+  SpreadsheetApp.getUi().showModalDialog(htmlOutput, '설정');
+}
+
+// 유틸리티: 숫자 포맷팅
+function formatNumber(num) {
+  if (typeof num === 'number') {
+    return num.toFixed(2);
+  }
+  return num;
+}
+
+// 테스트 함수
+function testDataExtraction() {
+  const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  const sheet = spreadsheet.getSheetByName(CONFIG.SHEET_NAME);
+  const data = extractData(sheet);
+  
+  console.log('추출된 데이터:', data);
+}
