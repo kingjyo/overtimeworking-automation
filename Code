@@ -1,0 +1,3174 @@
+// 메인 실행 함수 - 자동으로 현재와 가장 가까운 시트를 찾아서 분석
+function runMonthlyClosing() {
+  console.log('===== 월말 마감 분석 시작 =====');
+  console.log(`실행 시간: ${new Date().toLocaleString()}`);
+  
+  // 메모리 사용량 확인
+  try {
+    console.log(`사용 가능한 실행 시간: ${(6 * 60 * 1000 - (new Date().getTime() - startTime)) / 1000}초`);
+  } catch (e) {
+    // startTime이 없을 경우 무시
+  }
+  
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const allSheets = ss.getSheets();
+  
+  // 축산과 생수 시트를 분리하여 찾기
+  const livestockSheets = [];
+  const waterSheets = [];
+  
+  console.log('시트 검색 중...');
+  console.log(`전체 시트 개수: ${allSheets.length}`);
+  
+  allSheets.forEach(sheet => {
+    const sheetName = sheet.getName();
+    console.log(`시트 확인: ${sheetName}`);
+    const match = sheetName.match(/^(\d{4})년\s*(\d{1,2})월\s*\((축산|생수)\)$/);
+    
+    if (match) {
+      const sheetInfo = {
+        name: sheetName,
+        sheet: sheet,
+        year: parseInt(match[1]),
+        month: parseInt(match[2]),
+        type: match[3],
+        date: new Date(parseInt(match[1]), parseInt(match[2]) - 1)
+      };
+      
+      console.log(`발견: ${sheetName} (${match[3]})`);
+      
+      if (match[3] === '축산') {
+        livestockSheets.push(sheetInfo);
+      } else if (match[3] === '생수') {
+        waterSheets.push(sheetInfo);
+      }
+    }
+  });
+  
+  console.log(`축산 시트: ${livestockSheets.length}개`);
+  console.log(`생수 시트: ${waterSheets.length}개`);
+  
+  // 처리할 데이터 저장
+  const processedData = {};
+  
+  // 축산 시트 처리
+  if (livestockSheets.length > 0) {
+    console.log('\n=== 축산 시트 처리 시작 ===');
+    try {
+      const livestockResult = processSheetsByType(livestockSheets, '축산');
+      Object.assign(processedData, livestockResult);
+    } catch (error) {
+      console.error('축산 시트 처리 중 오류:', error.toString());
+      console.error('스택 트레이스:', error.stack);
+      
+      // 오류 발생 시 디버깅 정보 출력
+      if (error.message.includes('Service invoked too many times')) {
+        console.error('API 호출 한도 초과 - 작업을 나누어 실행하세요');
+      }
+    }
+  }
+  
+  // 생수 시트 처리
+  if (waterSheets.length > 0) {
+    console.log('\n=== 생수 시트 처리 시작 ===');
+    try {
+      const waterResult = processSheetsByType(waterSheets, '생수');
+      Object.assign(processedData, waterResult);
+    } catch (error) {
+      console.error('생수 시트 처리 중 오류:', error.toString());
+      console.error('스택 트레이스:', error.stack);
+    }
+  }
+  
+  // 비교 분석 및 최종 리포트 생성
+  if (Object.keys(processedData).length >= 2) {
+    console.log('\n=== 비교 리포트 생성 ===');
+    createComparisonReport(processedData);
+    
+    // 총 정리 표 업데이트 추가
+    console.log('\n=== 총 정리 표 업데이트 ===');
+    try {
+      updateSummaryTable(processedData);
+      console.log('총 정리 표 업데이트 완료');
+    } catch (error) {
+      console.error('총 정리 표 업데이트 중 오류:', error.toString());
+    }
+    
+    // 모든 분석 완료 후 원본 데이터 정리
+    console.log('\n=== 원본 데이터 정리 ===');
+    Object.keys(processedData).forEach(sheetName => {
+      const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+      if (sheet) {
+        cleanupOriginalData(sheet);
+      }
+    });
+    
+    console.log('\n===== 월말 마감 분석 완료 =====');
+    SpreadsheetApp.getUi().alert('분석 완료', '월말 마감 분석이 완료되었습니다.', SpreadsheetApp.getUi().ButtonSet.OK);
+  } else {
+    console.error('분석할 수 있는 시트가 부족합니다.');
+    SpreadsheetApp.getUi().alert('분석할 수 있는 시트가 부족합니다.');
+  }
+}
+
+// 전역 시작 시간 기록
+const startTime = new Date().getTime();
+
+// 전체 월말 마감 프로세스 테스트 (축산 + 생수 모두)
+function testFullMonthlyClosingProcess() {
+  console.log('🚀 ===== 전체 월말 마감 프로세스 테스트 시작 =====');
+  console.log(`테스트 시작 시간: ${new Date().toLocaleString()}`);
+  
+  const testStartTime = new Date().getTime();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const allSheets = ss.getSheets();
+  
+  // 축산과 생수 시트 분류
+  const livestockSheets = [];
+  const waterSheets = [];
+  
+  console.log('\n📋 시트 검색 및 분류...');
+  
+  allSheets.forEach(sheet => {
+    const sheetName = sheet.getName();
+    const match = sheetName.match(/^(\d{4})년\s*(\d{1,2})월\s*\((축산|생수)\)$/);
+    
+    if (match) {
+      const sheetInfo = {
+        name: sheetName,
+        sheet: sheet,
+        year: parseInt(match[1]),
+        month: parseInt(match[2]),
+        type: match[3],
+        date: new Date(parseInt(match[1]), parseInt(match[2]) - 1)
+      };
+      
+      console.log(`✓ 발견: ${sheetName}`);
+      
+      if (match[3] === '축산') {
+        livestockSheets.push(sheetInfo);
+      } else if (match[3] === '생수') {
+        waterSheets.push(sheetInfo);
+      }
+    }
+  });
+  
+  console.log(`\n📊 시트 현황:`);
+  console.log(`- 축산 시트: ${livestockSheets.length}개`);
+  console.log(`- 생수 시트: ${waterSheets.length}개`);
+  
+  const processedData = {};
+  const processSummary = {
+    축산: { success: false, sheets: [], errors: [] },
+    생수: { success: false, sheets: [], errors: [] }
+  };
+  
+  // 1. 축산 시트 처리
+  if (livestockSheets.length > 0) {
+    console.log(`\n${'='.repeat(60)}`);
+    console.log('🐄 === 축산 부문 처리 시작 ===');
+    console.log(`${'='.repeat(60)}`);
+    
+    try {
+      const result = testProcessSheetsByType(livestockSheets, '축산');
+      Object.assign(processedData, result.data);
+      processSummary.축산 = result.summary;
+    } catch (error) {
+      console.error('❌ 축산 시트 처리 중 전체 오류:', error.toString());
+      processSummary.축산.errors.push(error.toString());
+    }
+  }
+  
+  // 2. 생수 시트 처리
+  if (waterSheets.length > 0) {
+    console.log(`\n${'='.repeat(60)}`);
+    console.log('💧 === 생수 부문 처리 시작 ===');
+    console.log(`${'='.repeat(60)}`);
+    
+    try {
+      const result = testProcessSheetsByType(waterSheets, '생수');
+      Object.assign(processedData, result.data);
+      processSummary.생수 = result.summary;
+    } catch (error) {
+      console.error('❌ 생수 시트 처리 중 전체 오류:', error.toString());
+      processSummary.생수.errors.push(error.toString());
+    }
+  }
+  
+  // 3. 비교 리포트 생성
+  console.log(`\n${'='.repeat(60)}`);
+  console.log('📊 === 비교 리포트 생성 ===');
+  console.log(`${'='.repeat(60)}`);
+  
+  if (Object.keys(processedData).length >= 2) {
+    try {
+      createComparisonReport(processedData);
+      console.log('✅ 비교 리포트 생성 완료');
+      
+      // 총 정리 표 업데이트 추가
+      updateSummaryTable(processedData);
+      console.log('✅ 총 정리 표 업데이트 완료');
+    } catch (error) {
+      console.error('❌ 리포트 생성 실패:', error.toString());
+    }
+  } else {
+    console.error('⚠️  비교할 수 있는 시트가 부족합니다.');
+  }
+  
+  // 4. 최종 결과 요약
+  const totalDuration = (new Date().getTime() - testStartTime) / 1000;
+  
+  console.log(`\n${'='.repeat(60)}`);
+  console.log('📋 === 전체 프로세스 결과 요약 ===');
+  console.log(`${'='.repeat(60)}`);
+  
+  console.log('\n🐄 축산 부문:');
+  if (processSummary.축산.sheets.length > 0) {
+    console.log(`  ✅ 처리된 시트: ${processSummary.축산.sheets.join(', ')}`);
+  }
+  if (processSummary.축산.errors.length > 0) {
+    console.log(`  ❌ 오류: ${processSummary.축산.errors.length}건`);
+  }
+  
+  console.log('\n💧 생수 부문:');
+  if (processSummary.생수.sheets.length > 0) {
+    console.log(`  ✅ 처리된 시트: ${processSummary.생수.sheets.join(', ')}`);
+  }
+  if (processSummary.생수.errors.length > 0) {
+    console.log(`  ❌ 오류: ${processSummary.생수.errors.length}건`);
+  }
+  
+  console.log(`\n⏱️  총 소요시간: ${totalDuration}초`);
+  console.log('\n🏁 ===== 전체 월말 마감 프로세스 테스트 종료 =====');
+}
+
+// 타입별 시트 처리 테스트 (상세 로그 포함)
+function testProcessSheetsByType(sheets, type) {
+  if (sheets.length === 0) return { data: {}, summary: { success: true, sheets: [], errors: [] } };
+  
+  const summary = { success: true, sheets: [], errors: [] };
+  
+  // 날짜 순으로 정렬 (최신순)
+  sheets.sort((a, b) => b.date - a.date);
+  
+  // 현재 날짜와 가장 가까운 시트 찾기
+  const now = new Date();
+  const currentSheet = sheets.find(s => s.date <= now) || sheets[0];
+  
+  console.log(`\n📌 ${type} 기준 시트: ${currentSheet.name}`);
+  
+  // 전월 시트 찾기
+  const prevMonthSheet = findPreviousMonthSheet(sheets, currentSheet);
+  
+  // 작년 동월 시트 찾기
+  const prevYearSheet = findPreviousYearSheet(sheets, currentSheet);
+  
+  // 찾은 시트들 처리
+  const processedData = {};
+  const sheetsToProcess = [];
+  
+  // 처리할 시트 목록
+  sheetsToProcess.push({ sheet: currentSheet, label: '현재' });
+  if (prevMonthSheet) sheetsToProcess.push({ sheet: prevMonthSheet, label: '전월' });
+  if (prevYearSheet) sheetsToProcess.push({ sheet: prevYearSheet, label: '작년동월' });
+  
+  console.log(`\n처리할 ${type} 시트:`);
+  sheetsToProcess.forEach(item => {
+    console.log(`  - ${item.label}: ${item.sheet.name}`);
+  });
+  
+  // 각 시트 처리
+  sheetsToProcess.forEach((item, index) => {
+    console.log(`\n${'─'.repeat(50)}`);
+    console.log(`📄 ${type} - ${item.label} 시트 처리: ${item.sheet.name}`);
+    console.log(`${'─'.repeat(50)}`);
+    
+    try {
+      const result = testProcessSingleSheet(item.sheet.sheet);
+      processedData[item.sheet.name] = result;
+      summary.sheets.push(item.sheet.name);
+      console.log(`✅ ${item.sheet.name} 처리 완료`);
+    } catch (error) {
+      console.error(`❌ ${item.sheet.name} 처리 실패:`, error.toString());
+      summary.errors.push(`${item.sheet.name}: ${error.toString()}`);
+      summary.success = false;
+    }
+  });
+  
+  return { data: processedData, summary: summary };
+}
+
+// 단일 시트 처리 테스트 (8단계 포함)
+function testProcessSingleSheet(sheet) {
+  const sheetName = sheet.getName();
+  const steps = [
+    { num: 1, name: '헤더 수정', func: modifyHeaders },
+    { num: 2, name: '병합된 셀 해제', func: unmergeAllCells },
+    { num: 3, name: '불필요한 셀 삭제', func: deleteUnnecessaryCells },
+    { num: 4, name: 'AG, AH 열 삽입', func: insertReasonColumns },
+    { num: 5, name: 'U열 시간 형식 변환', func: convertTimeFormat },
+    { num: 6, name: 'AF열 신청사유 정리', func: standardizeAndSplitReasons },
+    { num: 7, name: '원본 데이터 테두리 추가', func: addBorderToOriginalData },
+    { num: 8, name: '사유별 시간 분배 및 집계', func: distributeAndSummarize }
+  ];
+  
+  let result = null;
+  
+  for (const step of steps) {
+    console.log(`  ${step.num}단계: ${step.name}...`, '');
+    try {
+      if (step.num === 8) {
+        result = step.func(sheet);
+      } else {
+        step.func(sheet);
+      }
+      console.log(' ✓');
+    } catch (error) {
+      console.log(' ✗');
+      throw new Error(`${step.num}단계(${step.name}) 실패: ${error.toString()}`);
+    }
+  }
+  
+  return result;
+}
+
+// 특정 타입의 시트들을 처리하는 함수
+function processSheetsByType(sheets, type) {
+  if (sheets.length === 0) return {};
+  
+  // 날짜 순으로 정렬 (최신순)
+  sheets.sort((a, b) => b.date - a.date);
+  
+  // 현재 날짜와 가장 가까운 시트 찾기
+  const now = new Date();
+  const currentSheet = sheets.find(s => s.date <= now) || sheets[0];
+  
+  console.log(`${type} - 기준 시트: ${currentSheet.name}`);
+  
+  // 전월 시트 찾기
+  const prevMonthSheet = findPreviousMonthSheet(sheets, currentSheet);
+  
+  // 작년 동월 시트 찾기
+  const prevYearSheet = findPreviousYearSheet(sheets, currentSheet);
+  
+  // 찾은 시트들 처리
+  const processedData = {};
+  
+  // 현재 시트 처리
+  processedData[currentSheet.name] = processSheet(currentSheet.sheet);
+  
+  // 전월 시트 처리
+  if (prevMonthSheet) {
+    console.log(`${type} - 전월 시트: ${prevMonthSheet.name}`);
+    processedData[prevMonthSheet.name] = processSheet(prevMonthSheet.sheet);
+  }
+  
+  // 작년 동월 시트 처리
+  if (prevYearSheet) {
+    console.log(`${type} - 작년 동월 시트: ${prevYearSheet.name}`);
+    processedData[prevYearSheet.name] = processSheet(prevYearSheet.sheet);
+  }
+  
+  return processedData;
+}
+
+// 전월 시트 찾기
+function findPreviousMonthSheet(sheets, currentSheet) {
+  let targetYear = currentSheet.year;
+  let targetMonth = currentSheet.month - 1;
+  
+  if (targetMonth === 0) {
+    targetMonth = 12;
+    targetYear--;
+  }
+  
+  return sheets.find(s => s.year === targetYear && s.month === targetMonth);
+}
+
+// 작년 동월 시트 찾기
+function findPreviousYearSheet(sheets, currentSheet) {
+  const targetYear = currentSheet.year - 1;
+  const targetMonth = currentSheet.month;
+  
+  return sheets.find(s => s.year === targetYear && s.month === targetMonth);
+}
+
+// 개별 시트 처리 함수
+function processSheet(sheet) {
+  const sheetName = sheet.getName();
+  console.log(`=== ${sheetName} 시트 처리 시작 ===`);
+  
+  try {
+    // 1. 헤더 수정 - "신청", "변경스케줄", "결과" 추가
+    console.log(`${sheetName}: 1. 헤더 수정 중...`);
+    modifyHeaders(sheet);
+    
+    // 2. 병합된 셀 해제
+    console.log(`${sheetName}: 2. 병합된 셀 해제 중...`);
+    unmergeAllCells(sheet);
+    
+    // 3. 불필요한 셀 삭제 (셀을 삭제하고 위로 이동)
+    console.log(`${sheetName}: 3. 불필요한 셀 삭제 중...`);
+    deleteUnnecessaryCells(sheet);
+    
+    // 4. AG, AH 열 삽입 (수정자 열 앞에)
+    console.log(`${sheetName}: 4. AG, AH 열 삽입 중...`);
+    insertReasonColumns(sheet);
+    
+    // 5. U열 시간 형식 변환
+    console.log(`${sheetName}: 5. U열 시간 형식 변환 중...`);
+    convertTimeFormat(sheet);
+    
+    // 6. AF열 신청사유 정리 및 AG, AH열에 분리
+    console.log(`${sheetName}: 6. AF열 신청사유 정리 중...`);
+    standardizeAndSplitReasons(sheet);
+    
+    // 7. 원본 데이터 테두리 추가
+    console.log(`${sheetName}: 7. 원본 데이터 테두리 추가 중...`);
+    addBorderToOriginalData(sheet);
+    
+    // 8. 사유별 시간 분배 및 집계
+    console.log(`${sheetName}: 8. 사유별 시간 분배 및 집계 중...`);
+    const summary = distributeAndSummarize(sheet);
+    
+    console.log(`${sheetName}: 처리 완료!`);
+    console.log(`${sheetName}: 집계 결과:`, JSON.stringify(summary));
+    
+    return summary;
+    
+  } catch (error) {
+    console.error(`${sheetName}: 처리 중 오류 발생!`);
+    console.error(`오류 내용: ${error.toString()}`);
+    console.error(`스택 트레이스: ${error.stack}`);
+    throw error;
+  }
+}
+
+// 1. 헤더 수정 함수
+function modifyHeaders(sheet) {
+  const sheetName = sheet.getName();
+  console.log(`${sheetName}: 헤더 수정 시작`);
+  
+  try {
+    // E2:L2에 "신청" 추가
+    console.log(`${sheetName}: E2:L2 범위 수정 시작`);
+    for (let col = 5; col <= 12; col++) {
+      console.log(`${sheetName}: 열 ${col} 읽기 시도`);
+      const value = sheet.getRange(2, col).getValue();
+      console.log(`${sheetName}: 열 ${col} 값: "${value}"`);
+      if (value) {
+        sheet.getRange(2, col).setValue("신청 " + value);
+      }
+    }
+    
+    // O2:P2에 "변경스케줄" 추가
+    console.log(`${sheetName}: O2:P2 범위 수정 시작`);
+    for (let col = 15; col <= 16; col++) {
+      console.log(`${sheetName}: 열 ${col} 읽기 시도`);
+      const value = sheet.getRange(2, col).getValue();
+      console.log(`${sheetName}: 열 ${col} 값: "${value}"`);
+      if (value) {
+        sheet.getRange(2, col).setValue("변경스케줄 " + value);
+      }
+    }
+    
+    // S2, T2에 "결과" 추가
+    console.log(`${sheetName}: S2, T2 수정 시작`);
+    const sValue = sheet.getRange(2, 19).getValue();
+    console.log(`${sheetName}: S2 값: "${sValue}"`);
+    const tValue = sheet.getRange(2, 20).getValue();
+    console.log(`${sheetName}: T2 값: "${tValue}"`);
+    if (sValue) sheet.getRange(2, 19).setValue("결과 " + sValue);
+    if (tValue) sheet.getRange(2, 20).setValue("결과 " + tValue);
+    
+    console.log(`${sheetName}: 헤더 수정 완료`);
+    
+  } catch (error) {
+    console.error(`${sheetName}: 헤더 수정 중 오류: ${error.toString()}`);
+    throw error;
+  }
+}
+
+// 2. 병합된 셀 해제
+function unmergeAllCells(sheet) {
+  const sheetName = sheet.getName();
+  console.log(`${sheetName}: 병합된 셀 해제 시작`);
+  
+  try {
+    // 작은 범위부터 시작하여 점진적으로 확대
+    const ranges = [
+      "A1:AI10",   // 먼저 상단 10행
+      "A11:AI20",  // 다음 10행
+      "A1:AI50"    // 상단 50행 전체
+    ];
+    
+    for (const rangeStr of ranges) {
+      try {
+        console.log(`${sheetName}: ${rangeStr} 범위 병합 해제 시도`);
+        const range = sheet.getRange(rangeStr);
+        range.breakApart();
+        console.log(`${sheetName}: ${rangeStr} 범위 병합 해제 완료`);
+      } catch (e) {
+        console.log(`${sheetName}: ${rangeStr} 범위 병합 해제 실패 (무시)`);
+      }
+    }
+    
+    console.log(`${sheetName}: 병합된 셀 해제 완료`);
+    
+  } catch (error) {
+    console.error(`${sheetName}: 병합 해제 중 오류: ${error.toString()}`);
+    // 오류가 있어도 계속 진행
+  }
+}
+
+// 3. 불필요한 셀 삭제 - 셀을 삭제하고 위로 이동
+function deleteUnnecessaryCells(sheet) {
+  const sheetName = sheet.getName();
+  console.log(`${sheetName}: 불필요한 셀 삭제 시작`);
+  
+  try {
+    // 특정 셀들을 삭제하고 위로 이동
+    // 순서를 뒤에서부터 처리해야 인덱스가 꼬이지 않음
+    
+    console.log(`${sheetName}: AD2:AG2 삭제 시도`);
+    sheet.getRange("AD2:AG2").deleteCells(SpreadsheetApp.Dimension.ROWS);
+    SpreadsheetApp.flush(); // 변경사항 즉시 적용
+    
+    console.log(`${sheetName}: Z1:AC1 삭제 시도`);
+    sheet.getRange("Z1:AC1").deleteCells(SpreadsheetApp.Dimension.ROWS);
+    SpreadsheetApp.flush();
+    
+    console.log(`${sheetName}: U2:Y2 삭제 시도`);
+    sheet.getRange("U2:Y2").deleteCells(SpreadsheetApp.Dimension.ROWS);
+    SpreadsheetApp.flush();
+    
+    console.log(`${sheetName}: S1:T1 삭제 시도`);
+    sheet.getRange("S1:T1").deleteCells(SpreadsheetApp.Dimension.ROWS);
+    SpreadsheetApp.flush();
+    
+    console.log(`${sheetName}: Q2:R2 삭제 시도`);
+    sheet.getRange("Q2:R2").deleteCells(SpreadsheetApp.Dimension.ROWS);
+    SpreadsheetApp.flush();
+    
+    console.log(`${sheetName}: O1:P1 삭제 시도`);
+    sheet.getRange("O1:P1").deleteCells(SpreadsheetApp.Dimension.ROWS);
+    SpreadsheetApp.flush();
+    
+    console.log(`${sheetName}: M2:N2 삭제 시도`);
+    sheet.getRange("M2:N2").deleteCells(SpreadsheetApp.Dimension.ROWS);
+    SpreadsheetApp.flush();
+    
+    console.log(`${sheetName}: E1:L1 삭제 시도`);
+    sheet.getRange("E1:L1").deleteCells(SpreadsheetApp.Dimension.ROWS);
+    SpreadsheetApp.flush();
+    
+    console.log(`${sheetName}: A2:D2 삭제 시도`);
+    sheet.getRange("A2:D2").deleteCells(SpreadsheetApp.Dimension.ROWS);
+    SpreadsheetApp.flush();
+    
+    console.log(`${sheetName}: 불필요한 셀 삭제 완료`);
+    
+  } catch (error) {
+    console.error(`${sheetName}: 셀 삭제 중 오류 발생: ${error.toString()}`);
+    throw error;
+  }
+}
+
+// 4. AG, AH 열 삽입
+function insertReasonColumns(sheet) {
+  // AG 위치(33번째 열)에 2개 열 삽입
+  sheet.insertColumns(33, 2);
+  
+  // 헤더 설정
+  sheet.getRange("AG1").setValue("신청사유2");
+  sheet.getRange("AH1").setValue("신청사유3");
+}
+
+// 5. U열 시간 형식 변환
+function convertTimeFormat(sheet) {
+  const sheetName = sheet.getName();
+  const lastRow = sheet.getLastRow();
+  console.log(`${sheetName}: U열 시간 변환 - 마지막 행: ${lastRow}`);
+  
+  let convertedCount = 0;
+  let errorCount = 0;
+  
+  for (let row = 2; row <= lastRow; row++) {
+    try {
+      const timeValue = sheet.getRange(row, 21).getValue(); // U열
+      if (timeValue) {
+        console.log(`${sheetName}: 행 ${row} - 원본 값: "${timeValue}" (타입: ${typeof timeValue})`);
+        
+        if (typeof timeValue === 'string') {
+          const converted = convertTimeToMinutes(timeValue);
+          sheet.getRange(row, 21).setValue(converted);
+          console.log(`${sheetName}: 행 ${row} - 변환 완료: ${converted}분`);
+          convertedCount++;
+        } else if (typeof timeValue === 'number') {
+          console.log(`${sheetName}: 행 ${row} - 이미 숫자 형식: ${timeValue}`);
+        }
+      }
+    } catch (error) {
+      errorCount++;
+      console.error(`${sheetName}: 행 ${row} 변환 중 오류: ${error.toString()}`);
+    }
+  }
+  
+  console.log(`${sheetName}: U열 시간 변환 완료 - 성공: ${convertedCount}, 오류: ${errorCount}`);
+}
+
+// 시간 문자열을 분으로 변환
+function convertTimeToMinutes(timeStr) {
+  console.log(`시간 변환 시도: "${timeStr}"`);
+  
+  const match = timeStr.match(/(\d+)시간\s*(\d+)분/);
+  if (match) {
+    const hours = parseInt(match[1]);
+    const minutes = parseInt(match[2]);
+    const totalMinutes = hours * 60 + minutes;
+    console.log(`변환 성공: ${hours}시간 ${minutes}분 = ${totalMinutes}분`);
+    return totalMinutes;
+  }
+  
+  console.warn(`변환 실패 - 패턴 불일치: "${timeStr}"`);
+  return 0;
+}
+
+// 6. AF열 신청사유 정리 및 AG, AH열에 분리
+function standardizeAndSplitReasons(sheet) {
+  const sheetName = sheet.getName();
+  console.log(`${sheetName}: 신청사유 표준화 시작`);
+  
+  const lastRow = sheet.getLastRow();
+  console.log(`${sheetName}: 처리할 행 수: ${lastRow - 1}행 (2행부터 ${lastRow}행까지)`);
+  
+  let processedCount = 0;
+  let errorCount = 0;
+  
+  for (let row = 2; row <= lastRow; row++) {
+    try {
+      // 10행마다 진행 상황 출력
+      if (row % 10 === 0) {
+        console.log(`${sheetName}: 신청사유 처리 진행 중... ${row}/${lastRow}`);
+        SpreadsheetApp.flush(); // 변경사항 주기적 저장
+      }
+      
+      let reasonStr = sheet.getRange(row, 32).getValue(); // AF열
+      if (!reasonStr) continue;
+      
+      console.log(`${sheetName}: 행 ${row} - 원본 사유: "${reasonStr}"`);
+      
+      // 먼저 각 사유를 분리
+      const reasons = splitReasonsAdvanced(reasonStr);
+      console.log(`${sheetName}: 행 ${row} - 분리된 사유: ${reasons.length}개`);
+      
+      // 각 사유를 표준화
+      const standardizedReasons = reasons.map(reason => {
+        const standardized = standardizeReason(reason);
+        if (reason !== standardized) {
+          console.log(`${sheetName}: 행 ${row} - 표준화: "${reason}" → "${standardized}"`);
+        }
+        return standardized;
+      });
+      
+      // AF, AG, AH 열에 분배
+      sheet.getRange(row, 32).setValue(""); // 먼저 초기화
+      sheet.getRange(row, 33).setValue("");
+      sheet.getRange(row, 34).setValue("");
+      
+      if (standardizedReasons.length > 0) {
+        sheet.getRange(row, 32).setValue(standardizedReasons[0]); // AF열
+      }
+      if (standardizedReasons.length > 1) {
+        sheet.getRange(row, 33).setValue(standardizedReasons[1]); // AG열
+      }
+      if (standardizedReasons.length > 2) {
+        sheet.getRange(row, 34).setValue(standardizedReasons[2]); // AH열
+      }
+      
+      processedCount++;
+      
+    } catch (error) {
+      errorCount++;
+      console.error(`${sheetName}: 행 ${row} 처리 중 오류: ${error.toString()}`);
+    }
+  }
+  
+  console.log(`${sheetName}: 신청사유 표준화 완료 - 처리: ${processedCount}, 오류: ${errorCount}`);
+}
+
+// 고급 사유 분리 함수 - 괄호 안의 "및" 제외
+function splitReasonsAdvanced(reasonStr) {
+  // 숫자 콤마를 점으로 먼저 변환
+  reasonStr = reasonStr.replace(/(\d),(\d+)\s*[Ll]/g, '$1.$2L');
+  
+  // 괄호 안의 내용을 임시로 치환
+  const bracketContents = [];
+  let processed = reasonStr.replace(/\([^)]*\)/g, (match) => {
+    bracketContents.push(match);
+    return `BRACKET_${bracketContents.length - 1}`;
+  });
+  
+  // "송아지 분만 및 처치"와 "분만 및 처치" 보호
+  if (processed.includes("송아지 분만 및 처치")) {
+    processed = processed.replace(/송아지 분만 및 처치/g, "TEMP_SONGAJI");
+  }
+  if (processed.includes("분만 및 처치")) {
+    processed = processed.replace(/분만 및 처치/g, "TEMP_BUNMAN");
+  }
+  
+  // 괄호 밖의 "및"만 콤마로 변경
+  processed = processed.replace(/\s*및\s*/g, ',');
+  
+  // 보호했던 것들 복원
+  processed = processed.replace(/TEMP_SONGAJI/g, "송아지 분만 및 처치");
+  processed = processed.replace(/TEMP_BUNMAN/g, "분만 및 처치");
+  
+  // 괄호 내용 복원
+  processed = processed.replace(/BRACKET_(\d+)/g, (match, index) => {
+    return bracketContents[parseInt(index)];
+  });
+  
+  // 콤마로 분리
+  const splitReasons = processed.split(',').map(r => r.trim()).filter(r => r);
+  
+  return splitReasons;
+}
+
+// 개별 사유 표준화
+function standardizeReason(reason) {
+  // 괄호 내용 처리
+  const bracketMatch = reason.match(/(.+)\((.+)\)/);
+  if (bracketMatch) {
+    if (bracketMatch[2].includes('인공적출')) {
+      return '인공적출';
+    } else if (bracketMatch[2].includes('신축사')) {
+      return '신축사 축우 이동';
+    } else if (bracketMatch[1].trim().includes('환축관리') || bracketMatch[1].trim().includes('환축 관리')) {
+      return '환축 관리';
+    } else {
+      reason = bracketMatch[1].trim();
+    }
+  }
+  
+  // 띄어쓰기 정리
+  reason = reason.trim().replace(/\s+/g, ' ');
+  
+  // 생수 관련 표준화
+  if (reason.includes('생산') || reason.includes('BTL') || reason.includes('병') || reason.includes('CAP') || reason.includes('btl')) {
+    return standardizeWaterReason(reason);
+  }
+  
+  // 정비 관련
+  if (reason.includes('정비')) {
+    return '생산설비 정비';
+  }
+  
+  // 축산 표준화 매핑
+  const standardMap = {
+    '송아지 분만 및 처치': ['송아지 처치', '송아지 분만', '분만 및 처치', '분만및처치', '송아지 분만 및 처치', '분만 처치'],
+    '축사 소독': ['축사소독', '축사 소독'],
+    '영농 장비 기름 주유': ['영농장비 기름주유', '영농장비기름주유', '영농장비 기름 주유', '영농장비 주유', '기름주유'],
+    '환축 관리': ['환축관리', '환축사 환축송아지 관리', '환축 관리'],
+    '백신 접종': ['럼피스킨 송아지 접종후 관찰', '접종'],
+    '신축사 축우 이동': ['축우이동', '축우 이동']
+  };
+  
+  // 표준화 적용
+  for (const [standard, variations] of Object.entries(standardMap)) {
+    if (variations.some(v => reason.includes(v)) || reason === standard) {
+      return standard;
+    }
+  }
+  
+  // 특별 케이스 처리
+  if (reason.includes('접종')) return '백신 접종';
+  if (reason.includes('환축') && reason.includes('관리')) return '환축 관리';
+  if (reason.includes('영농') && reason.includes('주유')) return '영농 장비 기름 주유';
+  if (reason.includes('분만') || reason.includes('송아지') && (reason.includes('처치') || reason.includes('분만'))) return '송아지 분만 및 처치';
+  if (reason.includes('축사') && reason.includes('소독')) return '축사 소독';
+  
+  return reason;
+}
+
+// 생수 사유 표준화 함수
+function standardizeWaterReason(reason) {
+  // 용량 표시에서 컴마를 점으로 변환 (예: 1,5L → 1.5L)
+  reason = reason.replace(/(\d),(\d+)\s*[Ll]/g, '$1.$2L');
+  
+  // 05L → 0.5L 변환
+  reason = reason.replace(/05L/g, '0.5L');
+  
+  // 띄어쓰기 제거한 버전으로 비교
+  const noSpaceReason = reason.replace(/\s+/g, '').toLowerCase();
+  
+  // 병 → BTL 변환
+  reason = reason.replace(/병생산/g, 'BTL생산');
+  reason = reason.replace(/병 생산/g, 'BTL생산');
+  
+  // btl → BTL 변환 (대소문자)
+  reason = reason.replace(/btl/gi, 'BTL');
+  reason = reason.replace(/cap/gi, 'CAP');
+  
+  // 생수 표준 매핑 (띄어쓰기 무시하고 매칭)
+  const waterStandardMap = {
+    '0.33L 제품생산': ['0.33l제품생산', '0.33L제품생산', '0,33l제품생산', '0,33L제품생산'],
+    '0.33L BTL생산': ['0.33lbtl생산', '0.33LBTL생산', '0.33l병생산', '0,33lbtl생산', '0,33LBTL생산'],
+    '0.33L btlcap생산': ['0.33lbtlcap생산', '0.33LBTLCAP생산', '0,33lbtlcap생산', '0,33LBTLCAP생산'],
+    '0.5L BTL/CAP 생산': ['0.5lbtl/cap생산', '0.5LBTL/CAP생산', '0.5lbtlcap생산', '0,5lbtl/cap생산', '0,5LBTL/CAP생산'],
+    '0.5L BTL 생산': ['0.5lbtl생산', '0.5LBTL생산', '0,5lbtl생산', '0,5LBTL생산'],
+    '0.5L 제품생산': ['05l제품생산', '05L제품생산', '0.5l제품생산', '0.5L제품생산', '0,5l제품생산', '0,5L제품생산'],
+    '1.5L BTL생산': ['1.5lbtl생산', '1.5LBTL생산', '1.5l병생산', '1,5lbtl생산', '1,5LBTL생산'],
+    '1.5L 제품생산': ['1.5l제품생산', '1.5L제품생산', '1,5l제품생산', '1,5L제품생산']
+  };
+  
+  // 표준화 적용
+  for (const [standard, variations] of Object.entries(waterStandardMap)) {
+    // 띄어쓰기 제거한 표준값
+    const noSpaceStandard = standard.replace(/\s+/g, '').toLowerCase();
+    
+    if (noSpaceReason.includes(noSpaceStandard) || 
+        variations.some(v => noSpaceReason.includes(v.toLowerCase()))) {
+      return standard;
+    }
+  }
+  
+  // 일반적인 패턴 매칭 (컴마 포함)
+  const patterns = [
+    { pattern: /0[.,]33\s*[Ll]\s*제품\s*생산/, standard: '0.33L 제품생산' },
+    { pattern: /0[.,]33\s*[Ll]\s*BTL\s*생산/, standard: '0.33L BTL생산' },
+    { pattern: /0[.,]33\s*[Ll]\s*btlcap\s*생산/i, standard: '0.33L btlcap생산' },
+    { pattern: /0[.,]5\s*[Ll]\s*BTL[\/\s]*CAP\s*생산/i, standard: '0.5L BTL/CAP 생산' },
+    { pattern: /0[.,]5\s*[Ll]\s*BTL\s*생산/i, standard: '0.5L BTL 생산' },
+    { pattern: /05\s*[Ll]\s*제품\s*생산/, standard: '0.5L 제품생산' },
+    { pattern: /0[.,]5\s*[Ll]\s*제품\s*생산/, standard: '0.5L 제품생산' },
+    { pattern: /1[.,]5\s*[Ll]\s*BTL\s*생산/, standard: '1.5L BTL생산' },
+    { pattern: /1[.,]5\s*[Ll]\s*제품\s*생산/, standard: '1.5L 제품생산' }
+  ];
+  
+  for (const { pattern, standard } of patterns) {
+    if (pattern.test(reason)) {
+      return standard;
+    }
+  }
+  
+  return reason;
+}
+
+// 7. 원본 데이터 테두리 추가
+function addBorderToOriginalData(sheet) {
+  const lastRow = getLastDataRow(sheet);
+  const lastCol = 35; // AI열까지
+  
+  // 원본 데이터 범위에만 테두리 적용
+  const dataRange = sheet.getRange(1, 1, lastRow, lastCol);
+  dataRange.setBorder(true, true, true, true, true, true, "black", SpreadsheetApp.BorderStyle.SOLID);
+  
+  // 헤더(1행) 서식 적용
+  const headerRange = sheet.getRange(1, 1, 1, lastCol);
+  headerRange.setFontWeight("bold");
+  headerRange.setBackground("#a4c2f4"); // 하늘색 2
+}
+
+// 데이터의 마지막 행 찾기 - 더 안전한 버전
+function getLastDataRow(sheet) {
+  const sheetName = sheet.getName();
+  const maxRows = sheet.getMaxRows();
+  
+  console.log(`${sheetName}: 마지막 데이터 행 찾기 시작`);
+  console.log(`${sheetName}: 시트 최대 행: ${maxRows}`);
+  
+  // getLastRow() 먼저 시도
+  try {
+    const lastRow = sheet.getLastRow();
+    console.log(`${sheetName}: getLastRow() 결과: ${lastRow}`);
+    
+    // lastRow가 0이면 빈 시트
+    if (lastRow === 0) {
+      console.log(`${sheetName}: 빈 시트`);
+      return 0;
+    }
+    
+    // lastRow 이후 몇 행을 추가로 확인
+    let actualLastRow = lastRow;
+    const checkRows = Math.min(10, maxRows - lastRow);
+    
+    for (let i = 1; i <= checkRows; i++) {
+      const row = lastRow + i;
+      if (row > maxRows) break;
+      
+      try {
+        // 한 번에 적은 열만 확인
+        const rowData = sheet.getRange(row, 1, 1, Math.min(10, sheet.getLastColumn())).getValues()[0];
+        const hasData = rowData.some(cell => cell !== "" && cell !== null);
+        
+        if (hasData) {
+          actualLastRow = row;
+          console.log(`${sheetName}: 추가 데이터 발견 - 행 ${row}`);
+        }
+      } catch (e) {
+        console.log(`${sheetName}: 행 ${row} 확인 중 오류 (무시)`);
+        break;
+      }
+    }
+    
+    console.log(`${sheetName}: 최종 마지막 데이터 행: ${actualLastRow}`);
+    return actualLastRow;
+    
+  } catch (error) {
+    console.error(`${sheetName}: getLastRow() 실패, 대체 방법 사용`);
+    console.error(error.toString());
+    
+    // 대체 방법: 뒤에서부터 확인
+    for (let row = maxRows; row >= 1; row--) {
+      try {
+        // A열만 확인하여 성능 향상
+        const cellValue = sheet.getRange(row, 1).getValue();
+        if (cellValue !== "" && cellValue !== null) {
+          console.log(`${sheetName}: 대체 방법으로 찾은 마지막 행: ${row}`);
+          return row;
+        }
+      } catch (e) {
+        // 계속 진행
+      }
+    }
+    
+    console.log(`${sheetName}: 데이터 없음`);
+    return 0;
+  }
+}
+
+// 8. 사유별 시간 분배 및 집계
+function distributeAndSummarize(sheet) {
+  const sheetName = sheet.getName();
+  const lastRow = getLastDataRow(sheet);
+  const dailyData = [];
+  const reasonSummary = {};
+  
+  console.log(`${sheetName}: 사유별 집계 시작 - 데이터 행: 2 ~ ${lastRow}`);
+  
+  let processedRows = 0;
+  let skippedRows = 0;
+  
+  for (let row = 2; row <= lastRow; row++) {
+    try {
+      const date = sheet.getRange(row, 9).getValue(); // I열 (신청 근무일)
+      const totalMinutes = sheet.getRange(row, 21).getValue(); // U열 (결과시간)
+      
+      console.log(`${sheetName}: 행 ${row} - 날짜: ${date}, 시간: ${totalMinutes}`);
+      
+      if (date && totalMinutes) {
+        // AF, AG, AH 열에서 사유 수집
+        const reasons = [];
+        for (let col = 32; col <= 34; col++) { // AF=32, AG=33, AH=34
+          const reason = sheet.getRange(row, col).getValue();
+          if (reason) {
+            reasons.push(reason);
+            console.log(`${sheetName}: 행 ${row} - 사유 ${col-31}: "${reason}"`);
+          }
+        }
+        
+        if (reasons.length > 0) {
+          const minutesPerReason = totalMinutes / reasons.length;
+          console.log(`${sheetName}: 행 ${row} - 사유당 시간: ${minutesPerReason}분`);
+          
+          // 일별 데이터 저장
+          const dayData = {
+            date: formatDate(date),
+            reasons: reasons,
+            minutes: reasons.map(() => minutesPerReason)
+          };
+          dailyData.push(dayData);
+          
+          // 사유별 집계
+          reasons.forEach(reason => {
+            if (!reasonSummary[reason]) {
+              reasonSummary[reason] = {count: 0, minutes: 0};
+            }
+            reasonSummary[reason].count += 1;
+            reasonSummary[reason].minutes += minutesPerReason;
+          });
+          
+          processedRows++;
+        } else {
+          console.warn(`${sheetName}: 행 ${row} - 사유가 없음`);
+          skippedRows++;
+        }
+      } else {
+        if (!date) console.log(`${sheetName}: 행 ${row} - 날짜 없음`);
+        if (!totalMinutes) console.log(`${sheetName}: 행 ${row} - 시간 없음`);
+        skippedRows++;
+      }
+    } catch (error) {
+      console.error(`${sheetName}: 행 ${row} 처리 중 오류: ${error.toString()}`);
+      skippedRows++;
+    }
+  }
+  
+  console.log(`${sheetName}: 집계 완료 - 처리: ${processedRows}행, 건너뜀: ${skippedRows}행`);
+  console.log(`${sheetName}: 사유별 요약:`, JSON.stringify(reasonSummary, null, 2));
+  
+  // 중간 정리표 생성
+  try {
+    createIntermediateTables(sheet, dailyData, reasonSummary);
+  } catch (error) {
+    console.error(`${sheetName}: 중간 정리표 생성 중 오류: ${error.toString()}`);
+  }
+  
+  return reasonSummary;
+}
+
+// 날짜 포맷 함수
+function formatDate(date) {
+  if (date instanceof Date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  return date.toString();
+}
+
+// 중간 정리표 생성
+function createIntermediateTables(sheet, dailyData, reasonSummary) {
+  const startRow = sheet.getLastRow() + 3;
+  
+  // 스타일 설정
+  const headerColor = "#a4c2f4"; // 하늘색 2
+  const fontFamily = "Malgun Gothic"; // 맑은 고딕
+  
+  // 일별 사유 분석 표
+  createDailyReasonTable(sheet, startRow, dailyData, headerColor, fontFamily);
+  
+  // 시간 분배 표
+  const timeTableStartRow = startRow + dailyData.length + 5;
+  createTimeDistributionTable(sheet, timeTableStartRow, dailyData, headerColor, fontFamily);
+  
+  // 사유별 집계표
+  const summaryStartRow = timeTableStartRow + dailyData.length + 5;
+  createReasonSummaryTable(sheet, summaryStartRow, reasonSummary, headerColor, fontFamily);
+}
+
+// 일별 사유 분석 표 생성
+function createDailyReasonTable(sheet, startRow, dailyData, headerColor, fontFamily) {
+  // 제목
+  sheet.getRange(startRow, 1).setValue("일별 사유 분석")
+    .setFontWeight("bold")
+    .setFontFamily(fontFamily)
+    .setFontSize(13);
+  
+  // 헤더
+  const headerRange = sheet.getRange(startRow + 1, 1, 1, 4);
+  headerRange.setValues([["근무일", "신청사유1", "신청사유2", "신청사유3"]])
+    .setBackground(headerColor)
+    .setFontWeight("bold")
+    .setFontFamily(fontFamily)
+    .setFontSize(11)
+    .setHorizontalAlignment("center");
+  
+  // 데이터
+  let currentRow = startRow + 2;
+  dailyData.forEach(day => {
+    sheet.getRange(currentRow, 1).setValue(day.date);
+    day.reasons.forEach((reason, idx) => {
+      if (idx < 3) {
+        sheet.getRange(currentRow, idx + 2).setValue(reason);
+      }
+    });
+    currentRow++;
+  });
+  
+  // 스타일 적용
+  const dataRange = sheet.getRange(startRow + 2, 1, dailyData.length, 4);
+  dataRange.setFontFamily(fontFamily)
+    .setFontSize(11)
+    .setHorizontalAlignment("center");
+  
+  // 테두리
+  const tableRange = sheet.getRange(startRow + 1, 1, dailyData.length + 1, 4);
+  tableRange.setBorder(true, true, true, true, true, true, "black", SpreadsheetApp.BorderStyle.SOLID);
+  
+  // 행 높이
+  for (let i = startRow + 1; i <= startRow + dailyData.length + 1; i++) {
+    sheet.setRowHeight(i, 32);
+  }
+  
+  // 열 너비 고정 설정
+  sheet.setColumnWidth(1, 140); // A열
+  sheet.setColumnWidth(2, 160); // B열
+  sheet.setColumnWidth(3, 160); // C열
+  sheet.setColumnWidth(4, 160); // D열
+}
+
+// 시간 분배 표 생성
+function createTimeDistributionTable(sheet, startRow, dailyData, headerColor, fontFamily) {
+  // 제목
+  sheet.getRange(startRow, 1).setValue("일별 시간 분배")
+    .setFontWeight("bold")
+    .setFontFamily(fontFamily)
+    .setFontSize(13);
+  
+  // 헤더
+  const headerRange = sheet.getRange(startRow + 1, 1, 1, 4);
+  headerRange.setValues([["근무일", "신청사유1 시간", "신청사유2 시간", "신청사유3 시간"]])
+    .setBackground(headerColor)
+    .setFontWeight("bold")
+    .setFontFamily(fontFamily)
+    .setFontSize(11)
+    .setHorizontalAlignment("center");
+  
+  // 데이터
+  let currentRow = startRow + 2;
+  let totalMinutes = [0, 0, 0];
+  
+  dailyData.forEach(day => {
+    sheet.getRange(currentRow, 1).setValue(day.date);
+    day.minutes.forEach((minutes, idx) => {
+      if (idx < 3) {
+        sheet.getRange(currentRow, idx + 2).setValue(minutes);
+        totalMinutes[idx] += minutes;
+      }
+    });
+    currentRow++;
+  });
+  
+  // 합계 행
+  sheet.getRange(currentRow, 1).setValue("합계")
+    .setFontWeight("bold")
+    .setFontFamily(fontFamily)
+    .setFontSize(11)
+    .setHorizontalAlignment("center");
+  
+  for (let i = 0; i < 3; i++) {
+    sheet.getRange(currentRow, i + 2).setValue(totalMinutes[i])
+      .setFontWeight("bold")
+      .setFontSize(11);
+  }
+  
+  // 스타일 적용
+  const dataRange = sheet.getRange(startRow + 2, 1, dailyData.length + 1, 4);
+  dataRange.setFontFamily(fontFamily)
+    .setFontSize(11);
+  
+  // 날짜는 가운데 정렬
+  sheet.getRange(startRow + 2, 1, dailyData.length + 1, 1).setHorizontalAlignment("center");
+  
+  // 숫자는 오른쪽 정렬
+  sheet.getRange(startRow + 2, 2, dailyData.length + 1, 3).setHorizontalAlignment("right");
+  
+  // 테두리
+  const tableRange = sheet.getRange(startRow + 1, 1, dailyData.length + 2, 4);
+  tableRange.setBorder(true, true, true, true, true, true, "black", SpreadsheetApp.BorderStyle.SOLID);
+  
+  // 행 높이
+  for (let i = startRow + 1; i <= startRow + dailyData.length + 2; i++) {
+    sheet.setRowHeight(i, 32);
+  }
+  
+  // 열 너비 고정 설정
+  sheet.setColumnWidth(1, 140); // A열
+  sheet.setColumnWidth(2, 160); // B열
+  sheet.setColumnWidth(3, 160); // C열
+  sheet.setColumnWidth(4, 160); // D열
+}
+
+// 사유별 집계표 생성
+function createReasonSummaryTable(sheet, startRow, reasonSummary, headerColor, fontFamily) {
+  const month = sheet.getName().match(/(\d+)년\s*(\d+)월/);
+  const monthLabel = month ? `${month[2]}월 사유` : "사유";
+  
+  // 제목
+  sheet.getRange(startRow, 1).setValue("사유별 집계")
+    .setFontWeight("bold")
+    .setFontFamily(fontFamily)
+    .setFontSize(13);
+  
+  // 헤더
+  const headerRange = sheet.getRange(startRow + 1, 1, 1, 3);
+  headerRange.setValues([[monthLabel, "횟수", "결과시간"]])
+    .setBackground(headerColor)
+    .setFontWeight("bold")
+    .setFontFamily(fontFamily)
+    .setFontSize(11)
+    .setHorizontalAlignment("center");
+  
+  // 데이터
+  let currentRow = startRow + 2;
+  let totalCount = 0;
+  let totalMinutes = 0;
+  
+  for (const [reason, data] of Object.entries(reasonSummary)) {
+    sheet.getRange(currentRow, 1).setValue(reason)
+      .setFontSize(11);
+    sheet.getRange(currentRow, 2).setValue(data.count)
+      .setFontSize(11);
+    sheet.getRange(currentRow, 3).setValue(data.minutes)
+      .setFontSize(11);
+    totalCount += data.count;
+    totalMinutes += data.minutes;
+    currentRow++;
+  }
+  
+  // 합계 행
+  sheet.getRange(currentRow, 1).setValue("합계")
+    .setFontWeight("bold")
+    .setFontFamily(fontFamily)
+    .setFontSize(11)
+    .setHorizontalAlignment("center");
+  sheet.getRange(currentRow, 2).setValue(totalCount)
+    .setFontWeight("bold")
+    .setFontSize(11);
+  sheet.getRange(currentRow, 3).setValue(totalMinutes)
+    .setFontWeight("bold")
+    .setFontSize(11);
+  
+  // 스타일 적용
+  const dataRange = sheet.getRange(startRow + 2, 1, Object.keys(reasonSummary).length + 1, 3);
+  dataRange.setFontFamily(fontFamily);
+  
+  // 사유는 가운데 정렬
+  sheet.getRange(startRow + 2, 1, Object.keys(reasonSummary).length + 1, 1).setHorizontalAlignment("center");
+  
+  // 숫자는 오른쪽 정렬
+  sheet.getRange(startRow + 2, 2, Object.keys(reasonSummary).length + 1, 2).setHorizontalAlignment("right");
+  
+  // 테두리
+  const tableRange = sheet.getRange(startRow + 1, 1, Object.keys(reasonSummary).length + 2, 3);
+  tableRange.setBorder(true, true, true, true, true, true, "black", SpreadsheetApp.BorderStyle.SOLID);
+  
+  // 행 높이
+  for (let i = startRow + 1; i <= startRow + Object.keys(reasonSummary).length + 2; i++) {
+    sheet.setRowHeight(i, 32);
+  }
+  
+  // 열 너비 고정 설정
+  sheet.setColumnWidth(1, 140); // A열
+  sheet.setColumnWidth(2, 160); // B열
+  sheet.setColumnWidth(3, 160); // C열
+}
+
+// 비교 리포트 생성 - 동적으로 년월 찾기
+function createComparisonReport(processedData) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // 처리된 시트 정보 분석
+  const sheetInfos = [];
+  Object.keys(processedData).forEach(sheetName => {
+    const match = sheetName.match(/^(\d{4})년\s*(\d+)월\s*\((축산|생수)\)$/);
+    if (match) {
+      sheetInfos.push({
+        name: sheetName,
+        year: parseInt(match[1]),
+        month: parseInt(match[2]),
+        type: match[3],
+        data: processedData[sheetName]
+      });
+    }
+  });
+  
+  // 타입별로 분리
+  const livestockSheets = sheetInfos.filter(s => s.type === '축산');
+  const waterSheets = sheetInfos.filter(s => s.type === '생수');
+  
+  // 축산 리포트 생성
+  if (livestockSheets.length >= 2) {
+    createTypeSpecificReport(ss, livestockSheets, '축산');
+  }
+  
+  // 생수 리포트 생성
+  if (waterSheets.length >= 2) {
+    createTypeSpecificReport(ss, waterSheets, '생수');
+  }
+}
+
+// 타입별 리포트 생성
+function createTypeSpecificReport(ss, sheets, type) {
+  // 날짜순 정렬 (최신순)
+  sheets.sort((a, b) => {
+    if (a.year !== b.year) return b.year - a.year;
+    return b.month - a.month;
+  });
+  
+  const reportSheetName = `${type} 월말 마감 리포트`;
+  let reportSheet = ss.getSheetByName(reportSheetName);
+  
+  if (!reportSheet) {
+    reportSheet = ss.insertSheet(reportSheetName);
+  } else {
+    reportSheet.clear();
+  }
+  
+  // 스타일 설정
+  const headerColor = "#a4c2f4"; // 하늘색 2
+  const fontFamily = "Malgun Gothic"; // 맑은 고딕
+  
+  // 현재, 전월, 작년 시트 찾기
+  const current = sheets[0];
+  const prevMonth = sheets.find(s => 
+    (s.year === current.year && s.month === current.month - 1) ||
+    (s.year === current.year - 1 && current.month === 1 && s.month === 12)
+  );
+  const prevYear = sheets.find(s => s.year === current.year - 1 && s.month === current.month);
+  
+  // 모든 사유 목록 생성
+  const allReasons = new Set();
+  sheets.forEach(sheet => {
+    if (sheet.data) {
+      Object.keys(sheet.data).forEach(reason => allReasons.add(reason));
+    }
+  });
+  
+  let row = 1;
+  
+  // 1. 금월 vs 전월 비교표
+  if (current && prevMonth) {
+    row = createComparisonTable(reportSheet, row, 
+      `금월, 전월 사유 횟수 및 근무시간`,
+      ["사유", `${current.year}년 ${current.month}월`, `${prevMonth.year}년 ${prevMonth.month}월`], 
+      allReasons, current.data, prevMonth.data, 
+      headerColor, fontFamily, false);
+    row += 3;
+  }
+  
+  // 2. 금월 vs 전년 동월 비교표
+  if (current && prevYear) {
+    row = createComparisonTable(reportSheet, row, 
+      `금월, 전년 동월 사유 횟수 및 근무시간`,
+      ["사유", `${current.year}년 ${current.month}월`, `${prevYear.year}년 ${prevYear.month}월`], 
+      allReasons, current.data, prevYear.data,
+      headerColor, fontFamily, false);
+    row += 3;
+  }
+  
+  // 3. 전월 대비 증감표
+  if (current && prevMonth) {
+    row = createDifferenceTable(reportSheet, row, "전월대비 증감횟수 및 시간",
+      allReasons, current.data, prevMonth.data, headerColor, fontFamily);
+    row += 3;
+  }
+  
+  // 4. 전년 동월 대비 증감표
+  if (current && prevYear) {
+    row = createDifferenceTable(reportSheet, row, "전년 동월대비 증감횟수 및 시간",
+      allReasons, current.data, prevYear.data, headerColor, fontFamily);
+  }
+}
+
+// 비교표 생성 함수
+function createComparisonTable(sheet, startRow, title, headers, reasons, data1, data2, 
+  headerColor, fontFamily, isDifference) {
+  
+  // 제목
+  sheet.getRange(startRow, 1).setValue(title)
+    .setFontWeight("bold")
+    .setFontFamily(fontFamily)
+    .setFontSize(13);
+  
+  startRow += 2;
+  
+  // 헤더
+  const headerRange = sheet.getRange(startRow, 1, 1, 3);
+  headerRange.setValues([headers])
+    .setBackground(headerColor)
+    .setFontWeight("bold")
+    .setFontFamily(fontFamily)
+    .setFontSize(11)
+    .setHorizontalAlignment("center");
+  
+  // 데이터
+  let currentRow = startRow + 1;
+  reasons.forEach(reason => {
+    sheet.getRange(currentRow, 1).setValue(reason)
+      .setFontSize(11);
+    
+    if (!isDifference) {
+      sheet.getRange(currentRow, 2).setValue(
+        data1[reason] ? `${data1[reason].count}회 / ${data1[reason].minutes}분` : "0회 / 0분"
+      ).setFontSize(11);
+      sheet.getRange(currentRow, 3).setValue(
+        data2[reason] ? `${data2[reason].count}회 / ${data2[reason].minutes}분` : "0회 / 0분"
+      ).setFontSize(11);
+    }
+    currentRow++;
+  });
+  
+  // 스타일 적용
+  const dataRange = sheet.getRange(startRow + 1, 1, reasons.size, 3);
+  dataRange.setFontFamily(fontFamily)
+    .setHorizontalAlignment("center");
+  
+  // 테두리
+  const tableRange = sheet.getRange(startRow, 1, reasons.size + 1, 3);
+  tableRange.setBorder(true, true, true, true, true, true, "black", SpreadsheetApp.BorderStyle.SOLID);
+  
+  // 행 높이
+  for (let i = startRow; i <= startRow + reasons.size; i++) {
+    sheet.setRowHeight(i, 32);
+  }
+  
+  // 열 너비 고정 설정
+  sheet.setColumnWidth(1, 140); // A열
+  sheet.setColumnWidth(2, 160); // B열
+  sheet.setColumnWidth(3, 160); // C열
+  
+  return currentRow;
+}
+
+// 증감표 생성 함수
+function createDifferenceTable(sheet, startRow, title, reasons, current, comparison, 
+  headerColor, fontFamily) {
+  
+  // 제목
+  sheet.getRange(startRow, 1).setValue(title)
+    .setFontWeight("bold")
+    .setFontFamily(fontFamily)
+    .setFontSize(13);
+  
+  startRow += 2;
+  
+  // 헤더
+  const headerRange = sheet.getRange(startRow, 1, 1, 3);
+  headerRange.setValues([["사유", "횟수 증감", "시간 증감"]])
+    .setBackground(headerColor)
+    .setFontWeight("bold")
+    .setFontFamily(fontFamily)
+    .setFontSize(11)
+    .setHorizontalAlignment("center");
+  
+  // 데이터
+  let currentRow = startRow + 1;
+  let totalCountDiff = 0;
+  let totalMinutesDiff = 0;
+  
+  reasons.forEach(reason => {
+    const currentData = current[reason] || {count: 0, minutes: 0};
+    const compData = comparison[reason] || {count: 0, minutes: 0};
+    const countDiff = currentData.count - compData.count;
+    const minutesDiff = currentData.minutes - compData.minutes;
+    
+    sheet.getRange(currentRow, 1).setValue(reason)
+      .setFontSize(11);
+    sheet.getRange(currentRow, 2).setValue(countDiff)
+      .setFontSize(11);
+    sheet.getRange(currentRow, 3).setValue(minutesDiff)
+      .setFontSize(11);
+    
+    totalCountDiff += countDiff;
+    totalMinutesDiff += minutesDiff;
+    currentRow++;
+  });
+  
+  // 합계 행
+  sheet.getRange(currentRow, 1).setValue("합계")
+    .setFontWeight("bold")
+    .setFontFamily(fontFamily)
+    .setFontSize(11)
+    .setHorizontalAlignment("center");
+  sheet.getRange(currentRow, 2).setValue(totalCountDiff)
+    .setFontWeight("bold")
+    .setFontSize(11);
+  sheet.getRange(currentRow, 3).setValue(totalMinutesDiff)
+    .setFontWeight("bold")
+    .setFontSize(11);
+  
+  // 스타일 적용
+  const dataRange = sheet.getRange(startRow + 1, 1, reasons.size + 1, 3);
+  dataRange.setFontFamily(fontFamily);
+  
+  // 사유는 가운데 정렬
+  sheet.getRange(startRow + 1, 1, reasons.size + 1, 1).setHorizontalAlignment("center");
+  
+  // 숫자는 오른쪽 정렬
+  sheet.getRange(startRow + 1, 2, reasons.size + 1, 2).setHorizontalAlignment("right");
+  
+  // 테두리
+  const tableRange = sheet.getRange(startRow, 1, reasons.size + 2, 3);
+  tableRange.setBorder(true, true, true, true, true, true, "black", SpreadsheetApp.BorderStyle.SOLID);
+  
+  // 행 높이
+  for (let i = startRow; i <= startRow + reasons.size + 1; i++) {
+    sheet.setRowHeight(i, 32);
+  }
+  
+  // 열 너비 고정 설정
+  sheet.setColumnWidth(1, 140); // A열
+  sheet.setColumnWidth(2, 160); // B열
+  sheet.setColumnWidth(3, 160); // C열
+  
+  return currentRow;
+}
+
+// 원본 데이터 정리 함수
+function cleanupOriginalData(sheet) {
+  // 원본 데이터의 마지막 행 찾기
+  const lastDataRow = getLastDataRow(sheet);
+  
+  // 뒤에서부터 열 삭제 (인덱스 변경 방지)
+  try {
+    // 1. X:AD 열 삭제 (X=24, AD=30, 총 7개 열)
+    for (let col = 30; col >= 24; col--) {
+      sheet.getRange(1, col, lastDataRow, 1).deleteCells(SpreadsheetApp.Dimension.COLUMNS);
+    }
+    
+    // 2. O:P 열 삭제 (O=15, P=16, 총 2개 열)
+    for (let col = 16; col >= 15; col--) {
+      sheet.getRange(1, col, lastDataRow, 1).deleteCells(SpreadsheetApp.Dimension.COLUMNS);
+    }
+    
+    // 3. J열 삭제 (J=10)
+    sheet.getRange(1, 10, lastDataRow, 1).deleteCells(SpreadsheetApp.Dimension.COLUMNS);
+    
+    // 4. D열 (반려여부) 삭제
+    sheet.getRange(1, 4, lastDataRow, 1).deleteCells(SpreadsheetApp.Dimension.COLUMNS);
+    
+  } catch (e) {
+    console.log("열 삭제 오류: " + e.toString());
+  }
+  
+  // 삭제 후 새로운 열 개수 계산
+  const newLastCol = 24;
+  
+  // 원본 데이터 범위에 테두리 적용
+  const dataRange = sheet.getRange(1, 1, lastDataRow, newLastCol);
+  dataRange.setBorder(true, true, true, true, true, true, "black", SpreadsheetApp.BorderStyle.SOLID);
+  
+  // 헤더 서식 적용
+  const headerRange = sheet.getRange(1, 1, 1, newLastCol);
+  headerRange.setFontWeight("bold");
+  headerRange.setBackground("#a4c2f4"); // 하늘색 2
+  headerRange.setHorizontalAlignment("center");
+  
+  // 변경사항 강제 적용
+  SpreadsheetApp.flush();
+}
+
+// ========== 총 정리 표 관련 함수 (수정본) ==========
+
+// 개선된 총 정리 표 업데이트 함수
+function updateSummaryTable(processedData) {
+  console.log('\n' + '='.repeat(60));
+  console.log('📊 ===== 총 정리 표 업데이트 시작 =====');
+  console.log('='.repeat(60));
+  
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let summarySheet = ss.getSheetByName('총 정리 표');
+  
+  if (!summarySheet) {
+    console.log('❌ 총 정리 표 시트가 없습니다.');
+    SpreadsheetApp.getUi().alert('총 정리 표 시트를 먼저 만들어주세요.');
+    return;
+  }
+  
+  console.log('✅ 총 정리 표 시트 발견');
+  
+  // 3행의 헤더 읽기 (B3:D3)
+  const headers = summarySheet.getRange(3, 2, 1, 3).getValues()[0];
+  console.log('\n📋 총 정리 표 헤더 확인:');
+  console.log(`  B3: "${headers[0]}"`);
+  console.log(`  C3: "${headers[1]}"`);
+  console.log(`  D3: "${headers[2]}"`);
+  
+  // 헤더에서 월 정보 파싱
+  const headerInfo = parseHeadersImproved(headers);
+  console.log('\n📅 파싱된 헤더 정보:');
+  headerInfo.forEach((info, index) => {
+    const col = String.fromCharCode(66 + index); // B, C, D
+    if (info) {
+      console.log(`  ${col}열: ${info.year}년 ${info.month}월`);
+    } else {
+      console.log(`  ${col}열: 파싱 실패`);
+    }
+  });
+  
+  // 처리된 데이터에서 실제 시트 정보 수집
+  const sheetDataMap = collectSheetDataImproved(processedData);
+  console.log('\n📊 수집된 시트 데이터:');
+  Object.keys(sheetDataMap).forEach(key => {
+    const data = sheetDataMap[key];
+    if (data) {
+      console.log(`  ${key}: ${data.totalMinutes}분 = ${data.totalHours}시간`);
+    } else {
+      console.log(`  ${key}: 데이터 없음`);
+    }
+  });
+  
+  // B4:D5 영역 업데이트
+  console.log('\n🔄 데이터 업데이트 시작...');
+  updateSummaryDataImproved(summarySheet, headerInfo, sheetDataMap);
+  
+  console.log('\n' + '='.repeat(60));
+  console.log('✅ ===== 총 정리 표 업데이트 완료 =====');
+  console.log('='.repeat(60));
+}
+
+// 개선된 시트 데이터 수집 함수
+function collectSheetDataImproved(processedData) {
+  const sheetDataMap = {};
+  
+  console.log('\n📈 시트별 데이터 수집 중...');
+  
+  Object.keys(processedData).forEach(sheetName => {
+    console.log(`\n  시트: ${sheetName}`);
+    
+    const match = sheetName.match(/^(\d{4})년\s*(\d+)월\s*\((축산|생수)\)$/);
+    if (match) {
+      const year = parseInt(match[1]);
+      const month = parseInt(match[2]);
+      const type = match[3];
+      
+      // processedData에서 합계 계산
+      const totalMinutes = calculateTotalMinutes(processedData[sheetName]);
+      const totalHours = Math.round(totalMinutes / 60); // 정수로 반올림
+      
+      const key = `${year}-${month}-${type}`;
+      sheetDataMap[key] = {
+        sheetName: sheetName,
+        year: year,
+        month: month,
+        type: type,
+        totalMinutes: totalMinutes,
+        totalHours: totalHours
+      };
+      
+      console.log(`    → 키: ${key}`);
+      console.log(`    → 총 시간: ${totalMinutes}분 = ${totalHours}시간`);
+    } else {
+      console.log(`    → 시트명 형식이 맞지 않음`);
+    }
+  });
+  
+  return sheetDataMap;
+}
+
+// processedData에서 총 시간 계산
+function calculateTotalMinutes(data) {
+  let total = 0;
+  if (data && typeof data === 'object') {
+    Object.values(data).forEach(item => {
+      if (item && item.minutes) {
+        total += item.minutes;
+      }
+    });
+  }
+  return total;
+}
+
+// 총 정리 표 데이터 업데이트
+function updateSummaryData(sheet, headerInfo, sheetDataMap) {
+  console.log('\n📝 셀 업데이트 중...');
+  
+  // B4:D5 초기화
+  sheet.getRange('B4:D5').clearContent();
+  console.log('  B4:D5 영역 초기화 완료');
+  
+  // 각 열별로 처리
+  headerInfo.forEach((header, colIndex) => {
+    if (!header) {
+      console.log(`\n  ${String.fromCharCode(66 + colIndex)}열: 헤더 정보 없음 - 건너뜀`);
+      return;
+    }
+    
+    const col = colIndex + 2; // B=2, C=3, D=4
+    const colLetter = String.fromCharCode(66 + colIndex);
+    
+    console.log(`\n  ${colLetter}열 처리 (${header.year}년 ${header.month}월):`);
+    
+    // 축산 데이터 (4행)
+    const livestockKey = `${header.year}-${header.month}-축산`;
+    if (sheetDataMap[livestockKey]) {
+      const value = sheetDataMap[livestockKey].totalHours;
+      sheet.getRange(4, col).setValue(value);
+      console.log(`    ${colLetter}4 (축산): ${value}시간 입력 완료`);
+    } else {
+      console.log(`    ${colLetter}4 (축산): 데이터 없음`);
+    }
+    
+    // 생수 데이터 (5행)
+    const waterKey = `${header.year}-${header.month}-생수`;
+    if (sheetDataMap[waterKey]) {
+      const value = sheetDataMap[waterKey].totalHours;
+      sheet.getRange(5, col).setValue(value);
+      console.log(`    ${colLetter}5 (생수): ${value}시간 입력 완료`);
+    } else {
+      console.log(`    ${colLetter}5 (생수): 데이터 없음`);
+    }
+  });
+  
+  console.log('\n✅ 데이터 업데이트 완료');
+}
+
+// ========== 총 정리 표 관련 함수 (개선 버전) ==========
+
+// 메뉴에서 호출되는 함수 (누락되었던 함수)
+function updateSummaryTableOnly() {
+  console.log('\n' + '='.repeat(60));
+  console.log('📊 ===== 총 정리 표 단독 업데이트 시작 =====');
+  console.log('='.repeat(60));
+  
+  const ui = SpreadsheetApp.getUi();
+  
+  // 사용자에게 업데이트 방법 선택 제공
+  const result = ui.alert(
+    '총 정리 표 업데이트',
+    '업데이트 방법을 선택하세요:\n\n' +
+    '[예] - 기존 시트의 집계표에서 데이터 추출\n' +
+    '[아니오] - 시트 재처리 후 업데이트\n' +
+    '[취소] - 작업 취소',
+    ui.ButtonSet.YES_NO_CANCEL
+  );
+  
+  if (result === ui.Button.YES) {
+    // 기존 시트에서 데이터 추출
+    updateSummaryTableFromSheets();
+  } else if (result === ui.Button.NO) {
+    // 시트 재처리 후 업데이트
+    reprocessAndUpdateSummaryTable();
+  } else {
+    console.log('사용자가 취소함');
+  }
+}
+
+// 시트 재처리 후 총 정리 표 업데이트
+function reprocessAndUpdateSummaryTable() {
+  console.log('\n' + '='.repeat(60));
+  console.log('🔄 ===== 시트 재처리 후 총 정리 표 업데이트 =====');
+  console.log('='.repeat(60));
+  
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const summarySheet = ss.getSheetByName('총 정리 표');
+  
+  if (!summarySheet) {
+    SpreadsheetApp.getUi().alert('총 정리 표 시트가 없습니다.');
+    return;
+  }
+  
+  // 3행의 헤더 읽기
+  const headers = summarySheet.getRange(3, 2, 1, 3).getValues()[0];
+  console.log('\n📋 총 정리 표 헤더:');
+  headers.forEach((h, i) => {
+    console.log(`  ${String.fromCharCode(66 + i)}3: "${h}"`);
+  });
+  
+  // 헤더 파싱
+  const headerInfo = parseHeadersImproved(headers);
+  
+  // 처리할 시트 찾기
+  const sheetsToProcess = findSheetsForHeaders(ss, headerInfo);
+  
+  if (sheetsToProcess.length === 0) {
+    SpreadsheetApp.getUi().alert('처리할 시트를 찾을 수 없습니다.');
+    return;
+  }
+  
+  console.log('\n📄 처리할 시트:');
+  sheetsToProcess.forEach(s => console.log(`  - ${s.name}`));
+  
+  // 시트 처리
+  const processedData = {};
+  sheetsToProcess.forEach(sheetInfo => {
+    try {
+      console.log(`\n처리 중: ${sheetInfo.name}`);
+      const sheet = ss.getSheetByName(sheetInfo.name);
+      if (sheet) {
+        processedData[sheetInfo.name] = processSheet(sheet);
+      }
+    } catch (error) {
+      console.error(`${sheetInfo.name} 처리 실패: ${error.toString()}`);
+    }
+  });
+  
+  // 총 정리 표 업데이트
+  updateSummaryTable(processedData);
+  
+  SpreadsheetApp.getUi().alert('총 정리 표 업데이트가 완료되었습니다.');
+}
+
+// 개선된 헤더 파싱 함수
+function parseHeadersImproved(headers) {
+  const headerInfo = [];
+  const currentDate = new Date();
+  const currentYear = currentDate.getFullYear();
+  
+  headers.forEach((header, index) => {
+    if (!header) {
+      headerInfo.push(null);
+      return;
+    }
+    
+    const headerStr = header.toString().trim();
+    console.log(`\n  헤더 파싱 중: "${headerStr}"`);
+    
+    let parsed = null;
+    
+    // 다양한 형식 처리
+    // "7월" 형식
+    if (headerStr.match(/^(\d{1,2})월$/)) {
+      const month = parseInt(RegExp.$1);
+      // 현재 월보다 크면 작년으로 판단
+      const year = month > currentDate.getMonth() + 1 ? currentYear - 1 : currentYear;
+      parsed = { year: year, month: month, original: headerStr };
+      console.log(`    → ${year}년 ${month}월로 파싱 (단순 월)}`);
+    }
+    // "24년 7월" 형식
+    else if (headerStr.match(/^(\d{2})년\s*(\d{1,2})월$/)) {
+      const yearPart = parseInt(RegExp.$1);
+      const month = parseInt(RegExp.$2);
+      // 2000년대로 가정
+      const year = yearPart < 50 ? 2000 + yearPart : 1900 + yearPart;
+      parsed = { year: year, month: month, original: headerStr };
+      console.log(`    → ${year}년 ${month}월로 파싱 (2자리 연도)`);
+    }
+    // "2024년 7월" 형식
+    else if (headerStr.match(/^(\d{4})년\s*(\d{1,2})월$/)) {
+      const year = parseInt(RegExp.$1);
+      const month = parseInt(RegExp.$2);
+      parsed = { year: year, month: month, original: headerStr };
+      console.log(`    → ${year}년 ${month}월로 파싱 (4자리 연도)`);
+    }
+    // "2024.7" 또는 "2024/7" 형식
+    else if (headerStr.match(/^(\d{4})[.\/](\d{1,2})$/)) {
+      const year = parseInt(RegExp.$1);
+      const month = parseInt(RegExp.$2);
+      parsed = { year: year, month: month, original: headerStr };
+      console.log(`    → ${year}년 ${month}월로 파싱 (구분자 형식)`);
+    }
+    else {
+      console.log(`    → 파싱 실패`);
+    }
+    
+    headerInfo.push(parsed);
+  });
+  
+  return headerInfo;
+}
+
+// 헤더에 맞는 시트 찾기
+function findSheetsForHeaders(ss, headerInfo) {
+  const sheets = [];
+  const allSheets = ss.getSheets();
+  
+  headerInfo.forEach(header => {
+    if (!header) return;
+    
+    // 축산과 생수 시트 모두 찾기
+    ['축산', '생수'].forEach(type => {
+      const sheetName = `${header.year}년 ${header.month}월 (${type})`;
+      const sheet = allSheets.find(s => {
+        const name = s.getName();
+        // 정확한 매칭 또는 공백 차이 허용
+        return name === sheetName || 
+               name.replace(/\s+/g, '') === sheetName.replace(/\s+/g, '');
+      });
+      
+      if (sheet) {
+        sheets.push({
+          name: sheet.getName(),
+          year: header.year,
+          month: header.month,
+          type: type
+        });
+      }
+    });
+  });
+  
+  return sheets;
+}
+
+// 개선된 총 정리 표 업데이트 함수
+function updateSummaryTable(processedData) {
+  console.log('\n' + '='.repeat(60));
+  console.log('📊 ===== 총 정리 표 업데이트 시작 =====');
+  console.log('='.repeat(60));
+  
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let summarySheet = ss.getSheetByName('총 정리 표');
+  
+  if (!summarySheet) {
+    console.log('❌ 총 정리 표 시트가 없습니다.');
+    SpreadsheetApp.getUi().alert('총 정리 표 시트를 먼저 만들어주세요.');
+    return;
+  }
+  
+  console.log('✅ 총 정리 표 시트 발견');
+  
+  // 3행의 헤더 읽기 (B3:D3)
+  const headers = summarySheet.getRange(3, 2, 1, 3).getValues()[0];
+  console.log('\n📋 총 정리 표 헤더 확인:');
+  console.log(`  B3: "${headers[0]}"`);
+  console.log(`  C3: "${headers[1]}"`);
+  console.log(`  D3: "${headers[2]}"`);
+  
+  // 헤더에서 월 정보 파싱
+  const headerInfo = parseHeadersImproved(headers);
+  console.log('\n📅 파싱된 헤더 정보:');
+  headerInfo.forEach((info, index) => {
+    const col = String.fromCharCode(66 + index); // B, C, D
+    if (info) {
+      console.log(`  ${col}열: ${info.year}년 ${info.month}월`);
+    } else {
+      console.log(`  ${col}열: 파싱 실패`);
+    }
+  });
+  
+  // 처리된 데이터에서 실제 시트 정보 수집
+  const sheetDataMap = collectSheetDataImproved(processedData);
+  console.log('\n📊 수집된 시트 데이터:');
+  Object.keys(sheetDataMap).forEach(key => {
+    const data = sheetDataMap[key];
+    if (data) {
+      console.log(`  ${key}: ${data.totalMinutes}분 = ${data.totalHours}시간`);
+    } else {
+      console.log(`  ${key}: 데이터 없음`);
+    }
+  });
+  
+  // B4:D5 영역 업데이트
+  console.log('\n🔄 데이터 업데이트 시작...');
+  updateSummaryDataImproved(summarySheet, headerInfo, sheetDataMap);
+  
+  console.log('\n' + '='.repeat(60));
+  console.log('✅ ===== 총 정리 표 업데이트 완료 =====');
+  console.log('='.repeat(60));
+}
+
+// 개선된 시트 데이터 수집 함수
+function collectSheetDataImproved(processedData) {
+  const sheetDataMap = {};
+  
+  console.log('\n📈 시트별 데이터 수집 중...');
+  
+  Object.keys(processedData).forEach(sheetName => {
+    console.log(`\n  시트: ${sheetName}`);
+    
+    const match = sheetName.match(/^(\d{4})년\s*(\d+)월\s*\((축산|생수)\)$/);
+    if (match) {
+      const year = parseInt(match[1]);
+      const month = parseInt(match[2]);
+      const type = match[3];
+      
+      // processedData에서 합계 계산
+      const totalMinutes = calculateTotalMinutes(processedData[sheetName]);
+      const totalHours = Math.round(totalMinutes / 60); // 정수로 반올림
+      
+      const key = `${year}-${month}-${type}`;
+      sheetDataMap[key] = {
+        sheetName: sheetName,
+        year: year,
+        month: month,
+        type: type,
+        totalMinutes: totalMinutes,
+        totalHours: totalHours
+      };
+      
+      console.log(`    → 키: ${key}`);
+      console.log(`    → 총 시간: ${totalMinutes}분 = ${totalHours}시간`);
+    } else {
+      console.log(`    → 시트명 형식이 맞지 않음`);
+    }
+  });
+  
+  return sheetDataMap;
+}
+
+// 개선된 총 정리 표 데이터 업데이트
+function updateSummaryDataImproved(sheet, headerInfo, sheetDataMap) {
+  console.log('\n📝 셀 업데이트 중...');
+  
+  // B4:D5 초기화
+  sheet.getRange('B4:D5').clearContent();
+  console.log('  ✅ B4:D5 영역 초기화 완료');
+  
+  // 각 열별로 처리
+  headerInfo.forEach((header, colIndex) => {
+    if (!header) {
+      console.log(`\n  ⚠️ ${String.fromCharCode(66 + colIndex)}열: 헤더 정보 없음 - 건너뜀`);
+      return;
+    }
+    
+    const col = colIndex + 2; // B=2, C=3, D=4
+    const colLetter = String.fromCharCode(66 + colIndex);
+    
+    console.log(`\n  📌 ${colLetter}열 처리 (${header.year}년 ${header.month}월):`);
+    
+    // 축산 데이터 (4행)
+    const livestockKey = `${header.year}-${header.month}-축산`;
+    if (sheetDataMap[livestockKey]) {
+      const value = sheetDataMap[livestockKey].totalHours;
+      sheet.getRange(4, col).setValue(value);
+      console.log(`    ✅ ${colLetter}4 (축산): ${value}시간 입력 완료`);
+    } else {
+      sheet.getRange(4, col).setValue(0);
+      console.log(`    ⚠️ ${colLetter}4 (축산): 데이터 없음 → 0 입력`);
+    }
+    
+    // 생수 데이터 (5행)
+    const waterKey = `${header.year}-${header.month}-생수`;
+    if (sheetDataMap[waterKey]) {
+      const value = sheetDataMap[waterKey].totalHours;
+      sheet.getRange(5, col).setValue(value);
+      console.log(`    ✅ ${colLetter}5 (생수): ${value}시간 입력 완료`);
+    } else {
+      sheet.getRange(5, col).setValue(0);
+      console.log(`    ⚠️ ${colLetter}5 (생수): 데이터 없음 → 0 입력`);
+    }
+  });
+  
+  // 서식 적용
+  const dataRange = sheet.getRange('B4:D5');
+  dataRange.setNumberFormat('#,##0'); // 천 단위 구분
+  dataRange.setHorizontalAlignment('center');
+  dataRange.setFontFamily('Malgun Gothic');
+  dataRange.setFontSize(11);
+  
+  console.log('\n✅ 데이터 업데이트 및 서식 적용 완료');
+}
+
+// 기존 시트에서 데이터 추출하여 업데이트 (개선 버전)
+function updateSummaryTableFromSheets() {
+  console.log('\n' + '='.repeat(60));
+  console.log('📊 ===== 총 정리 표 업데이트 (시트에서 추출) =====');
+  console.log('='.repeat(60));
+  
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // 총 정리 표 확인
+  const summarySheet = ss.getSheetByName('총 정리 표');
+  if (!summarySheet) {
+    SpreadsheetApp.getUi().alert('총 정리 표 시트가 없습니다.');
+    return;
+  }
+  
+  console.log('✅ 총 정리 표 시트 발견');
+  
+  // 3행의 헤더 읽기
+  const headers = summarySheet.getRange(3, 2, 1, 3).getValues()[0];
+  console.log('\n📋 총 정리 표 헤더:');
+  headers.forEach((h, i) => {
+    console.log(`  ${String.fromCharCode(66 + i)}3: "${h}"`);
+  });
+  
+  // 헤더 파싱
+  const headerInfo = parseHeadersImproved(headers);
+  
+  // 모든 시트 검색
+  const allSheets = ss.getSheets();
+  const sheetDataMap = {};
+  
+  console.log('\n🔍 시트 검색 및 데이터 추출...');
+  
+  allSheets.forEach(sheet => {
+    const sheetName = sheet.getName();
+    const match = sheetName.match(/^(\d{4})년\s*(\d+)월\s*\((축산|생수)\)$/);
+    
+    if (match) {
+      console.log(`\n  📄 시트 발견: ${sheetName}`);
+      
+      const year = parseInt(match[1]);
+      const month = parseInt(match[2]);
+      const type = match[3];
+      
+      // 사유별 집계 표에서 합계 찾기
+      const totalMinutes = extractTotalFromSheetImproved(sheet);
+      
+      if (totalMinutes !== null) {
+        const totalHours = Math.round(totalMinutes / 60); // 정수로 반올림
+        const key = `${year}-${month}-${type}`;
+        
+        sheetDataMap[key] = {
+          sheetName: sheetName,
+          year: year,
+          month: month,
+          type: type,
+          totalMinutes: totalMinutes,
+          totalHours: totalHours
+        };
+        
+        console.log(`    ✅ 합계 추출 성공: ${totalMinutes}분 = ${totalHours}시간`);
+      } else {
+        console.log(`    ❌ 합계 추출 실패`);
+      }
+    }
+  });
+  
+  // 데이터 업데이트
+  console.log('\n📝 총 정리 표 업데이트 중...');
+  updateSummaryDataImproved(summarySheet, headerInfo, sheetDataMap);
+  
+  console.log('\n' + '='.repeat(60));
+  console.log('✅ ===== 업데이트 완료 =====');
+  console.log('='.repeat(60));
+  
+  SpreadsheetApp.getUi().alert('총 정리 표 업데이트 완료');
+}
+
+// 개선된 시트에서 합계 추출 함수
+function extractTotalFromSheetImproved(sheet) {
+  const sheetName = sheet.getName();
+  console.log(`    🔎 "${sheetName}"에서 합계 찾는 중...`);
+  
+  try {
+    const data = sheet.getDataRange().getValues();
+    
+    // "사유별 집계" 찾기
+    let summaryStartRow = -1;
+    for (let i = 0; i < data.length; i++) {
+      if (data[i][0] && data[i][0].toString().includes('사유별 집계')) {
+        summaryStartRow = i;
+        console.log(`      → "사유별 집계" 발견: ${i + 1}행`);
+        break;
+      }
+    }
+    
+    if (summaryStartRow === -1) {
+      console.log(`      → "사유별 집계" 찾지 못함`);
+      return null;
+    }
+    
+    // 헤더 행 확인 (사유별 집계 다음 행)
+    const headerRow = summaryStartRow + 1;
+    if (headerRow >= data.length) {
+      console.log(`      → 헤더 행 없음`);
+      return null;
+    }
+    
+    // "결과시간" 열 찾기
+    let resultCol = -1;
+    const headerData = data[headerRow];
+    for (let j = 0; j < headerData.length; j++) {
+      if (headerData[j] && headerData[j].toString().includes('결과시간')) {
+        resultCol = j;
+        console.log(`      → "결과시간" 열 발견: ${String.fromCharCode(65 + j)}열 (${j + 1}번째)`);
+        break;
+      }
+    }
+    
+    if (resultCol === -1) {
+      console.log(`      → "결과시간" 열 찾지 못함`);
+      return null;
+    }
+    
+    // "합계" 행 찾기 (사유별 집계 테이블 범위 내에서만)
+    const maxSearchRows = 50; // 최대 50행까지만 검색
+    for (let i = headerRow + 1; i < Math.min(headerRow + maxSearchRows, data.length); i++) {
+      if (data[i][0] && data[i][0].toString().trim() === '합계') {
+        const totalValue = data[i][resultCol];
+        console.log(`      → "합계" 행 발견: ${i + 1}행`);
+        console.log(`      → 결과시간 값: ${totalValue}`);
+        
+        if (totalValue !== null && totalValue !== '' && !isNaN(totalValue)) {
+          const minutes = parseFloat(totalValue);
+          console.log(`      → 파싱된 값: ${minutes}분`);
+          return minutes;
+        } else {
+          console.log(`      → 값이 유효하지 않음: "${totalValue}"`);
+        }
+      }
+    }
+    
+    console.log(`      → "합계" 행 찾지 못함`);
+    return null;
+    
+  } catch (error) {
+    console.error(`      → 오류 발생: ${error.toString()}`);
+    return null;
+  }
+}
+
+// 디버깅용: 총 정리 표 상태 확인
+function debugSummaryTableStatus() {
+  console.log('\n' + '='.repeat(60));
+  console.log('🔍 ===== 총 정리 표 상태 확인 =====');
+  console.log('='.repeat(60));
+  
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const summarySheet = ss.getSheetByName('총 정리 표');
+  
+  if (!summarySheet) {
+    console.log('❌ 총 정리 표 시트가 없습니다.');
+    return;
+  }
+  
+  // 헤더 확인
+  const headers = summarySheet.getRange(3, 2, 1, 3).getValues()[0];
+  console.log('\n📋 현재 헤더:');
+  headers.forEach((h, i) => {
+    const col = String.fromCharCode(66 + i);
+    console.log(`  ${col}3: "${h}"`);
+  });
+  
+  // 현재 데이터 확인
+  const currentData = summarySheet.getRange(4, 2, 2, 3).getValues();
+  console.log('\n📊 현재 데이터:');
+  console.log('  축산 (4행): B4=' + currentData[0][0] + ', C4=' + currentData[0][1] + ', D4=' + currentData[0][2]);
+  console.log('  생수 (5행): B5=' + currentData[1][0] + ', C5=' + currentData[1][1] + ', D5=' + currentData[1][2]);
+  
+  // 파싱 테스트
+  console.log('\n🔧 헤더 파싱 테스트:');
+  const headerInfo = parseHeadersImproved(headers);
+  headerInfo.forEach((info, i) => {
+    const col = String.fromCharCode(66 + i);
+    if (info) {
+      console.log(`  ${col}열: ${info.year}년 ${info.month}월`);
+    } else {
+      console.log(`  ${col}열: 파싱 실패`);
+    }
+  });
+  
+  // 사용 가능한 시트 확인
+  console.log('\n📄 사용 가능한 시트:');
+  const allSheets = ss.getSheets();
+  const availableSheets = [];
+  
+  allSheets.forEach(sheet => {
+    const sheetName = sheet.getName();
+    if (sheetName.match(/^(\d{4})년\s*(\d+)월\s*\((축산|생수)\)$/)) {
+      availableSheets.push(sheetName);
+      
+      // 해당 시트의 집계 데이터 확인
+      const total = extractTotalFromSheetImproved(sheet);
+      if (total !== null) {
+        const hours = Math.round(total / 60);
+        console.log(`  ✅ ${sheetName}: ${total}분 = ${hours}시간`);
+      } else {
+        console.log(`  ⚠️ ${sheetName}: 집계 데이터 없음`);
+      }
+    }
+  });
+  
+  if (availableSheets.length === 0) {
+    console.log('  ❌ 사용 가능한 시트가 없습니다.');
+  }
+  
+  console.log('\n' + '='.repeat(60));
+  console.log('✅ ===== 상태 확인 완료 =====');
+  console.log('='.repeat(60));
+}
+
+// ========== 별도 실행용: 기존 시트에서 데이터 추출 ==========
+
+// 총 정리 표만 업데이트 (기존 시트의 집계표에서 데이터 추출)
+function updateSummaryTableFromSheets() {
+  console.log('\n' + '='.repeat(60));
+  console.log('===== 총 정리 표 단독 업데이트 (시트에서 추출) =====');
+  console.log('='.repeat(60));
+  
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // 총 정리 표 확인
+  const summarySheet = ss.getSheetByName('총 정리 표');
+  if (!summarySheet) {
+    SpreadsheetApp.getUi().alert('총 정리 표 시트가 없습니다.');
+    return;
+  }
+  
+  console.log('✅ 총 정리 표 시트 발견');
+  
+  // 3행의 헤더 읽기
+  const headers = summarySheet.getRange(3, 2, 1, 3).getValues()[0];
+  console.log('\n📋 총 정리 표 헤더:');
+  headers.forEach((h, i) => {
+    console.log(`  ${String.fromCharCode(66 + i)}3: "${h}"`);
+  });
+  
+  // 헤더 파싱
+  const headerInfo = parseHeadersImproved(headers);
+  
+  // 모든 시트 검색
+  const allSheets = ss.getSheets();
+  const sheetDataMap = {};
+  
+  console.log('\n🔍 시트 검색 및 데이터 추출...');
+  
+  allSheets.forEach(sheet => {
+    const sheetName = sheet.getName();
+    const match = sheetName.match(/^(\d{4})년\s*(\d+)월\s*\((축산|생수)\)$/);
+    
+    if (match) {
+      console.log(`\n  📄 시트 발견: ${sheetName}`);
+      
+      const year = parseInt(match[1]);
+      const month = parseInt(match[2]);
+      const type = match[3];
+      
+      // 사유별 집계 표에서 합계 찾기
+      const totalMinutes = extractTotalFromSheet(sheet);
+      
+      if (totalMinutes !== null) {
+        const totalHours = Math.round(totalMinutes / 60 * 10) / 10;
+        const key = `${year}-${month}-${type}`;
+        
+        sheetDataMap[key] = {
+          sheetName: sheetName,
+          year: year,
+          month: month,
+          type: type,
+          totalMinutes: totalMinutes,
+          totalHours: totalHours
+        };
+        
+        console.log(`    ✅ 합계 추출 성공: ${totalMinutes}분 = ${totalHours}시간`);
+      } else {
+        console.log(`    ❌ 합계 추출 실패`);
+      }
+    }
+  });
+  
+  // 데이터 업데이트
+  console.log('\n📝 총 정리 표 업데이트 중...');
+  updateSummaryData(summarySheet, headerInfo, sheetDataMap);
+  
+  console.log('\n' + '='.repeat(60));
+  console.log('===== 업데이트 완료 =====');
+  console.log('='.repeat(60));
+  
+  SpreadsheetApp.getUi().alert('총 정리 표 업데이트 완료');
+}
+
+// 시트에서 사유별 집계 합계 추출
+function extractTotalFromSheet(sheet) {
+  console.log(`    🔎 "${sheet.getName()}"에서 합계 찾는 중...`);
+  
+  const data = sheet.getDataRange().getValues();
+  
+  // "사유별 집계" 찾기
+  let summaryStartRow = -1;
+  for (let i = 0; i < data.length; i++) {
+    if (data[i][0] && data[i][0].toString().includes('사유별 집계')) {
+      summaryStartRow = i;
+      console.log(`      → "사유별 집계" 발견: ${i + 1}행`);
+      break;
+    }
+  }
+  
+  if (summaryStartRow === -1) {
+    console.log(`      → "사유별 집계" 찾지 못함`);
+    return null;
+  }
+  
+  // 헤더 행 확인 (사유별 집계 다음 행)
+  const headerRow = summaryStartRow + 1;
+  if (headerRow >= data.length) {
+    console.log(`      → 헤더 행 없음`);
+    return null;
+  }
+  
+  // "결과시간" 열 찾기
+  let resultCol = -1;
+  const headerData = data[headerRow];
+  for (let j = 0; j < headerData.length; j++) {
+    if (headerData[j] && headerData[j].toString().includes('결과시간')) {
+      resultCol = j;
+      console.log(`      → "결과시간" 열 발견: ${j + 1}번째 열`);
+      break;
+    }
+  }
+  
+  if (resultCol === -1) {
+    console.log(`      → "결과시간" 열 찾지 못함`);
+    return null;
+  }
+  
+  // "합계" 행 찾기
+  for (let i = headerRow + 1; i < data.length; i++) {
+    if (data[i][0] && data[i][0].toString() === '합계') {
+      const totalValue = data[i][resultCol];
+      console.log(`      → "합계" 행 발견: ${i + 1}행`);
+      console.log(`      → 결과시간 값: ${totalValue}분`);
+      
+      if (totalValue && !isNaN(totalValue)) {
+        return parseFloat(totalValue);
+      }
+    }
+  }
+  
+  console.log(`      → "합계" 행 찾지 못함`);
+  return null;
+}
+
+// ========== 테스트 함수 ==========
+
+// 총 정리 표 테스트
+function testSummaryTableUpdate() {
+  console.log('\n' + '='.repeat(60));
+  console.log('===== 총 정리 표 테스트 =====');
+  console.log('='.repeat(60));
+  
+  // 테스트용 processedData 생성
+  const testData = {
+    '2024년 7월 (축산)': {
+      '송아지 분만 및 처치': { count: 10, minutes: 885 },
+      '환축 관리': { count: 13, minutes: 995 },
+      '인공수정': { count: 1, minutes: 60 },
+      '인공적출': { count: 4, minutes: 422.5 },
+      '영농 장비 기름 주유': { count: 1, minutes: 97.5 },
+      '분만': { count: 1, minutes: 30 },
+      '저치': { count: 1, minutes: 30 },
+      '기름주유': { count: 1, minutes: 40 }
+    },
+    '2024년 6월 (축산)': {
+      '영농 장비 기름 주유': { count: 5, minutes: 320 },
+      '송아지 분만 및 처치': { count: 9, minutes: 552.5 },
+      '환축 관리': { count: 12, minutes: 957.5 },
+      '인공적출': { count: 4, minutes: 397.5 },
+      '신축사 축우 이동': { count: 1, minutes: 97.5 }
+    },
+    '2024년 7월 (생수)': {
+      '0.5L 제품생산': { count: 10, minutes: 600 },
+      '1.5L BTL생산': { count: 8, minutes: 480 },
+      '생산설비 정비': { count: 2, minutes: 120 }
+    },
+    '2024년 6월 (생수)': {
+      '0.5L 제품생산': { count: 8, minutes: 480 },
+      '1.5L BTL생산': { count: 6, minutes: 360 }
+    }
+  };
+  
+  console.log('\n📊 테스트 데이터 준비 완료');
+  
+  // 각 시트의 합계 계산
+  Object.keys(testData).forEach(sheetName => {
+    const total = calculateTotalMinutes(testData[sheetName]);
+    const hours = Math.round(total / 60 * 10) / 10;
+    console.log(`  ${sheetName}: ${total}분 = ${hours}시간`);
+  });
+  
+  // 총 정리 표 업데이트
+  updateSummaryTable(testData);
+  
+  console.log('\n✅ 테스트 완료');
+}
+
+// 디버깅: 특정 시트의 집계표 확인
+function debugSheetSummary(sheetName) {
+  console.log(`\n===== ${sheetName} 집계표 디버깅 =====`);
+  
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(sheetName);
+  
+  if (!sheet) {
+    console.log('시트를 찾을 수 없습니다.');
+    return;
+  }
+  
+  const total = extractTotalFromSheet(sheet);
+  if (total !== null) {
+    const hours = Math.round(total / 60 * 10) / 10;
+    console.log(`\n✅ 최종 결과: ${total}분 = ${hours}시간`);
+  } else {
+    console.log('\n❌ 합계를 찾을 수 없습니다.');
+  }
+}
+
+// ========== UI 관련 함수 ==========
+
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+
+  // 메인 메뉴
+  const menu = ui.createMenu('연장근무 관리');
+
+  // [1] 비교분석 서브메뉴
+  const analysisMenu = ui.createMenu('비교분석')
+    .addItem('비교분석 실시', 'runMonthlyClosing')
+    .addItem('시트 선택하여 분석', 'showAnalysisDialog')
+    .addItem('총 정리 표 업데이트', 'updateSummaryTableOnly')
+    .addItem('엑셀 파일 업로더', 'showExcelUploader');
+
+  // [2] 연장근로 보고서 서브메뉴
+  const reportMenu = ui.createMenu('연장근로 보고서')
+    .addItem('월별 보고서 생성', 'createMonthlyReport')
+    .addItem('분기별 보고서 생성', 'createQuarterlyReport')
+    .addItem('연간 보고서 생성', 'createYearlyReport')
+    .addSeparator()
+    .addItem('보고서 템플릿 설정', 'configureReportTemplate')
+    .addItem('📄 보고서 생성', 'generateOvertimeReport') // 두 곳에서 중복 필요없으면 하나만 등록
+    .addSeparator()
+    .addItem('⚙️ 설정', 'showSettings');
+
+  // [3] 데이터 관리 서브메뉴
+  const dataMenu = ui.createMenu('데이터 관리')
+    .addItem('선택 시트 데이터 삭제', 'showDeleteSheetsDialog')
+    .addItem('모든 시트 데이터 초기화', 'deleteAllSheetsData')
+    .addItem('빈 행 정리', 'cleanupEmptyRows')
+    .addSeparator()
+    .addSubMenu(ui.createMenu('날짜 형식 관리')
+      .addItem('날짜 형식 수정 (No 열)', 'fixAllSheetsDateFormat')
+      .addItem('날짜 표시 형식 수정', 'fixAllDateDisplayFormat')
+      .addItem('날짜 형식 검증', 'validateAllSheetsDateFormat')
+      .addItem('날짜 문제 빠른 수정', 'quickFixDateIssues')
+      .addItem('통합 날짜 수정 (모든 문제)', 'fixAllDateIssues'));
+
+  // [4] 디버깅 도구 서브메뉴
+  const debugMenu = ui.createMenu('디버깅 도구')
+    .addItem('전체 과정 테스트', 'testFullProcess')
+    .addItem('시트 정보 확인', 'showDebugSheetInfo')
+    .addItem('총 정리 표 테스트', 'testSummaryTableUpdate')
+    .addItem('시트 집계표 확인', 'showDebugSheetSummary');
+
+  // [5] 메뉴에 서브메뉴 추가
+  menu
+    .addSubMenu(analysisMenu)
+    .addSubMenu(reportMenu)
+    .addSeparator()
+    .addSubMenu(dataMenu)
+    .addSeparator()
+    .addSubMenu(debugMenu)
+    .addSeparator()
+    .addItem('도움말', 'showHelp')
+    .addToUi();
+}
+
+// UI 표시 함수
+function showAnalysisDialog() {
+  const html = HtmlService.createHtmlOutputFromFile('index')
+      .setWidth(650)
+      .setHeight(600);
+  SpreadsheetApp.getUi()
+      .showModalDialog(html, '연장근무 월말 비교분석');
+}
+
+// UI에서 호출되는 분석 함수
+function runAnalysisWithSheets(selectedSheets) {
+  try {
+    // 선택된 시트로만 분석 실행
+    const processedData = {};
+    let processedCount = 0;
+    
+    selectedSheets.forEach((sheetName, index) => {
+      const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+      if (sheet) {
+        // 진행 상황 업데이트
+        updateClientStatus(`${sheetName} 시트 처리 중...`, Math.round((index) / selectedSheets.length * 60));
+        
+        processedData[sheetName] = processSheetWithStatus(sheet, sheetName);
+        processedCount++;
+      }
+    });
+    
+    // 비교 분석 리포트 생성
+    if (processedCount >= 2) {
+      updateClientStatus('비교 분석 리포트 생성 중...', 80);
+      createComparisonReport(processedData);
+      
+      // 총 정리 표 업데이트 추가
+      updateClientStatus('총 정리 표 업데이트 중...', 85);
+      try {
+        updateSummaryTable(processedData);
+      } catch (error) {
+        console.error('총 정리 표 업데이트 중 오류:', error.toString());
+      }
+      
+      // 원본 데이터 정리
+      updateClientStatus('원본 데이터 정리 중...', 90);
+      selectedSheets.forEach(sheetName => {
+        const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+        if (sheet) {
+          cleanupOriginalData(sheet);
+        }
+      });
+      
+      return { success: true, message: '분석이 완료되었습니다.' };
+    } else {
+      throw new Error('분석할 수 있는 시트가 부족합니다.');
+    }
+    
+  } catch (error) {
+    throw new Error('분석 중 오류가 발생했습니다: ' + error.toString());
+  }
+}
+
+// 진행 상황을 표시하면서 시트 처리
+function processSheetWithStatus(sheet, sheetName) {
+  updateClientStatus(`${sheetName}: 헤더 수정 중...`, null);
+  modifyHeaders(sheet);
+  
+  updateClientStatus(`${sheetName}: 병합 셀 해제 중...`, null);
+  unmergeAllCells(sheet);
+  
+  updateClientStatus(`${sheetName}: 불필요한 셀 정리 중...`, null);
+  deleteUnnecessaryCells(sheet);
+  
+  updateClientStatus(`${sheetName}: 열 추가 중...`, null);
+  insertReasonColumns(sheet);
+  
+  updateClientStatus(`${sheetName}: 시간 형식 변환 중...`, null);
+  convertTimeFormat(sheet);
+  
+  updateClientStatus(`${sheetName}: 신청사유 표준화 중...`, null);
+  standardizeAndSplitReasons(sheet);
+  
+  updateClientStatus(`${sheetName}: 테두리 적용 중...`, null);
+  addBorderToOriginalData(sheet);
+  
+  updateClientStatus(`${sheetName}: 사유별 집계 중...`, null);
+  const summary = distributeAndSummarize(sheet);
+  
+  return summary;
+}
+
+// 클라이언트에 상태 업데이트 전송
+function updateClientStatus(message, progress) {
+  // 캐시를 사용하여 상태 저장
+  const cache = CacheService.getUserCache();
+  cache.put('analysisStatus', JSON.stringify({
+    message: message,
+    progress: progress,
+    timestamp: new Date().getTime()
+  }), 300); // 5분간 유지
+}
+
+// 클라이언트에서 상태 확인
+function getAnalysisStatus() {
+  const cache = CacheService.getUserCache();
+  const status = cache.get('analysisStatus');
+  return status ? JSON.parse(status) : null;
+}
+
+// 분석 가능한 시트 목록 가져오기
+function getAnalyzableSheets() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const allSheets = ss.getSheets();
+  const analyzableSheets = [];
+  
+  // 분석 가능한 시트 패턴
+  const patterns = [
+    /^\d{4}년\s*\d{1,2}월\s*\(축산\)$/,
+    /^\d{4}년\s*\d{1,2}월\s*\(생수\)$/
+  ];
+  
+  allSheets.forEach(sheet => {
+    const sheetName = sheet.getName();
+    // 패턴에 맞는 시트만 포함
+    if (patterns.some(pattern => pattern.test(sheetName))) {
+      analyzableSheets.push({
+        name: sheetName,
+        type: sheetName.includes('축산') ? '축산' : '생수',
+        year: parseInt(sheetName.match(/(\d{4})년/)[1]),
+        month: parseInt(sheetName.match(/(\d{1,2})월/)[1])
+      });
+    }
+  });
+  
+  // 날짜 순으로 정렬 (최신순)
+  analyzableSheets.sort((a, b) => {
+    if (a.year !== b.year) return b.year - a.year;
+    return b.month - a.month;
+  });
+  
+  return analyzableSheets;
+}
+
+// 모든 시트 목록 가져오기 (삭제용)
+function getAllSheets() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheets = ss.getSheets();
+  
+  return sheets.map(sheet => ({
+    name: sheet.getName()
+  }));
+}
+
+// ========== 데이터 관리 함수 (총 정리 표 보호) ==========
+
+// 모든 시트의 데이터 초기화 - 총 정리 표는 제외
+function deleteAllSheetsData() {
+  const ui = SpreadsheetApp.getUi();
+  const result = ui.alert(
+    '경고',
+    '모든 시트의 데이터가 삭제됩니다.\n(총 정리 표는 제외)\n\n계속하시겠습니까?',
+    ui.ButtonSet.YES_NO
+  );
+  
+  if (result !== ui.Button.YES) {
+    return;
+  }
+  
+  console.log('모든 시트 데이터 초기화 시작 (총 정리 표 제외)');
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheets = ss.getSheets();
+  
+  // 보호할 시트 목록
+  const protectedSheets = ['총 정리 표'];
+  
+  let deletedCount = 0;
+  let skippedCount = 0;
+  
+  sheets.forEach(sheet => {
+    try {
+      const sheetName = sheet.getName();
+      
+      // 보호 시트인지 확인
+      if (protectedSheets.includes(sheetName)) {
+        console.log(`${sheetName} 시트는 보호됨 - 건너뜀`);
+        skippedCount++;
+        return;
+      }
+      
+      console.log(`${sheetName} 시트 초기화 중`);
+      sheet.clear();
+      deletedCount++;
+      console.log(`${sheetName} 시트 초기화 완료`);
+      
+    } catch (error) {
+      console.error(`시트 초기화 중 오류: ${error.toString()}`);
+    }
+  });
+  
+  ui.alert(`${deletedCount}개 시트의 데이터가 초기화되었습니다.\n${skippedCount}개 시트는 보호되어 건너뛰었습니다.`);
+}
+
+// 선택한 시트들의 데이터 삭제 - 총 정리 표는 선택 불가
+function deleteSheetsData(selectedSheets) {
+  console.log('선택한 시트 데이터 삭제 시작');
+  
+  // 보호 시트 필터링
+  const protectedSheets = ['총 정리 표'];
+  const filteredSheets = selectedSheets.filter(name => !protectedSheets.includes(name));
+  
+  if (filteredSheets.length < selectedSheets.length) {
+    const protectedCount = selectedSheets.length - filteredSheets.length;
+    console.log(`${protectedCount}개 보호 시트는 제외됨`);
+  }
+  
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let deletedCount = 0;
+  
+  filteredSheets.forEach(sheetName => {
+    try {
+      console.log(`${sheetName} 시트 삭제 시도`);
+      const sheet = ss.getSheetByName(sheetName);
+      if (sheet) {
+        sheet.clear();
+        deletedCount++;
+        console.log(`${sheetName} 시트 데이터 삭제 완료`);
+      } else {
+        console.log(`${sheetName} 시트를 찾을 수 없음`);
+      }
+    } catch (error) {
+      console.error(`${sheetName} 시트 삭제 중 오류: ${error.toString()}`);
+    }
+  });
+  
+  return {
+    success: true,
+    message: `${deletedCount}개 시트의 데이터가 삭제되었습니다.`
+  };
+}
+
+// 빈 행 정리 - 총 정리 표는 제외
+function cleanupEmptyRows() {
+  const ui = SpreadsheetApp.getUi();
+  const result = ui.alert(
+    '빈 행 정리',
+    '모든 시트에서 빈 행을 정리합니다.\n(총 정리 표는 제외)\n\n계속하시겠습니까?',
+    ui.ButtonSet.YES_NO
+  );
+  
+  if (result !== ui.Button.YES) {
+    return;
+  }
+  
+  console.log('빈 행 정리 시작');
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheets = ss.getSheets();
+  
+  // 보호 시트
+  const protectedSheets = ['총 정리 표'];
+  
+  let totalRemoved = 0;
+  
+  sheets.forEach(sheet => {
+    try {
+      const sheetName = sheet.getName();
+      
+      // 보호 시트는 건너뛰기
+      if (protectedSheets.includes(sheetName)) {
+        console.log(`${sheetName} 시트는 보호됨 - 건너뜀`);
+        return;
+      }
+      
+      console.log(`${sheetName} 시트 빈 행 정리 중`);
+      
+      const maxRows = sheet.getMaxRows();
+      const lastRow = sheet.getLastRow();
+      
+      if (lastRow < maxRows) {
+        const rowsToDelete = maxRows - lastRow;
+        console.log(`${sheetName}: ${rowsToDelete}개 빈 행 발견`);
+        
+        if (rowsToDelete > 0) {
+          sheet.deleteRows(lastRow + 1, rowsToDelete);
+          totalRemoved += rowsToDelete;
+          console.log(`${sheetName}: ${rowsToDelete}개 행 삭제 완료`);
+        }
+      }
+    } catch (error) {
+      console.error(`빈 행 정리 중 오류: ${error.toString()}`);
+    }
+  });
+  
+  ui.alert(`총 ${totalRemoved}개의 빈 행이 정리되었습니다.`);
+}
+
+// 엑셀 파일 업로드 함수
+function uploadExcelFile(base64Data, sheetName) {
+  try {
+    console.log(`엑셀 업로드 시작: ${sheetName}`);
+    
+    // Base64 디코드
+    const blob = Utilities.newBlob(
+      Utilities.base64Decode(base64Data), 
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 
+      sheetName + '.xlsx'
+    );
+    
+    // 임시 파일로 저장
+    const tempFile = DriveApp.createFile(blob);
+    const tempFileId = tempFile.getId();
+    
+    try {
+      // 엑셀 파일을 Google Sheets로 변환
+      const resource = {
+        title: sheetName,
+        mimeType: MimeType.GOOGLE_SHEETS,
+        parents: [{id: 'root'}]
+      };
+      
+      const convertedFile = Drive.Files.copy(resource, tempFileId);
+      const convertedFileId = convertedFile.id;
+      
+      // 변환된 스프레드시트 열기
+      const sourceSpreadsheet = SpreadsheetApp.openById(convertedFileId);
+      const sourceSheet = sourceSpreadsheet.getSheets()[0];
+      const sourceData = sourceSheet.getDataRange().getValues();
+      
+      // 현재 스프레드시트에 시트 생성
+      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      let targetSheet = ss.getSheetByName(sheetName);
+      
+      if (!targetSheet) {
+        targetSheet = ss.insertSheet(sheetName);
+      } else {
+        targetSheet.clear();
+      }
+      
+      // 데이터 복사
+      if (sourceData.length > 0) {
+        const targetRange = targetSheet.getRange(1, 1, sourceData.length, sourceData[0].length);
+        targetRange.setValues(sourceData);
+        
+        // 근무일 열 찾아서 서식만 변경
+        const headers = sourceData[0];
+        headers.forEach((header, index) => {
+          if (header.toString().includes('근무일')) {
+            const workDateRange = targetSheet.getRange(2, index + 1, sourceData.length - 1, 1);
+            workDateRange.setNumberFormat('yyyy-MM-dd');
+            console.log(`근무일 열(${index + 1}번째) 서식 적용 완료`);
+          }
+        });
+      }
+      
+      // 임시 파일 삭제
+      DriveApp.getFileById(tempFileId).setTrashed(true);
+      DriveApp.getFileById(convertedFileId).setTrashed(true);
+      
+      return {
+        success: true,
+        message: `${sheetName} 시트가 생성되었습니다.`
+      };
+      
+    } catch (error) {
+      try {
+        DriveApp.getFileById(tempFileId).setTrashed(true);
+      } catch (e) {}
+      throw error;
+    }
+    
+  } catch (error) {
+    console.error(`엑셀 업로드 오류: ${error.toString()}`);
+    throw new Error(`업로드 실패: ${error.toString()}`);
+  }
+}
+
+// 선택 시트 데이터 삭제 다이얼로그 표시
+function showDeleteSheetsDialog() {
+  const html = HtmlService.createHtmlOutputFromFile('delete-sheets')
+      .setWidth(650)
+      .setHeight(600);
+  SpreadsheetApp.getUi()
+      .showModalDialog(html, '시트 데이터 삭제');
+}
+
+// 엑셀 업로더 표시
+function showExcelUploader() {
+  const html = HtmlService.createHtmlOutputFromFile('uploader')
+      .setWidth(850)
+      .setHeight(700);
+  SpreadsheetApp.getUi()
+      .showModalDialog(html, '엑셀 파일 업로더');
+}
+
+// 도움말 함수
+function showHelp() {
+  const helpText = `
+연장근무 월말 비교분석 도움말
+
+1. 비교분석 실시: 
+   - 현재 날짜와 가장 가까운 시트를 자동으로 찾습니다
+   - 해당 시트를 기준으로 전월, 작년 동월 시트를 자동으로 분석합니다
+   - 축산과 생수 시트를 각각 구분하여 처리합니다
+   - 총 정리 표를 자동으로 업데이트합니다
+
+2. 시트 선택하여 분석: 
+   - 원하는 시트를 선택하여 분석할 수 있습니다
+
+3. 총 정리 표 업데이트:
+   - 총 정리 표만 별도로 업데이트할 수 있습니다
+
+4. 분석 결과:
+   - "축산 월말 마감 리포트" 시트에 축산 분석 결과 생성
+   - "생수 월말 마감 리포트" 시트에 생수 분석 결과 생성
+   - "총 정리 표" 시트에 전체 요약 데이터 업데이트
+
+주의사항:
+- 시트 이름은 "YYYY년 M월 (축산)" 또는 "YYYY년 M월 (생수)" 형식이어야 합니다
+- 최소 2개 이상의 시트가 있어야 비교 분석이 가능합니다
+- 분석 완료 후 원본 데이터가 자동으로 정리됩니다
+- 총 정리 표는 데이터 삭제 시 보호됩니다
+`;
+  
+  SpreadsheetApp.getUi().alert('도움말', helpText, SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
+// 메뉴에서 시트 정보 확인
+function showDebugSheetInfo() {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.prompt(
+    '시트 정보 확인',
+    '확인할 시트 이름을 입력하세요:',
+    ui.ButtonSet.OK_CANCEL
+  );
+  
+  if (response.getSelectedButton() === ui.Button.OK) {
+    const sheetName = response.getResponseText();
+    if (sheetName) {
+      debugSheetInfo(sheetName);
+      ui.alert('시트 정보가 로그에 출력되었습니다.\n\n확인 방법:\n1. 확장 프로그램 > Apps Script\n2. 실행 > 로그 보기 (Ctrl+Enter)');
+    }
+  }
+}
+
+// 디버깅용 시트 정보 출력
+function debugSheetInfo(sheetName) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(sheetName);
+  
+  if (!sheet) {
+    console.log(`시트를 찾을 수 없음: ${sheetName}`);
+    return;
+  }
+  
+  console.log(`\n=== ${sheetName} 시트 정보 ===`);
+  console.log(`최대 행: ${sheet.getMaxRows()}`);
+  console.log(`최대 열: ${sheet.getMaxColumns()}`);
+  console.log(`마지막 행: ${sheet.getLastRow()}`);
+  console.log(`마지막 열: ${sheet.getLastColumn()}`);
+  
+  // 샘플 데이터 출력
+  try {
+    const sampleRange = sheet.getRange(1, 1, Math.min(5, sheet.getLastRow()), Math.min(10, sheet.getLastColumn()));
+    const sampleData = sampleRange.getValues();
+    console.log('샘플 데이터 (처음 5행 x 10열):');
+    sampleData.forEach((row, index) => {
+      console.log(`행 ${index + 1}: ${JSON.stringify(row)}`);
+    });
+  } catch (error) {
+    console.error('샘플 데이터 읽기 실패:', error.toString());
+  }
+}
+
+// 테스트 함수 - 전체 과정 테스트
+function testFullProcess() {
+  testFullMonthlyClosingProcess();
+}
+
+// ========== 총 정리 표 관련 함수 (개선 버전) ==========
+
+// 메뉴에서 호출되는 함수 (누락되었던 함수)
+function updateSummaryTableOnly() {
+  console.log('\n' + '='.repeat(60));
+  console.log('📊 ===== 총 정리 표 단독 업데이트 시작 =====');
+  console.log('='.repeat(60));
+  
+  const ui = SpreadsheetApp.getUi();
+  
+  // 사용자에게 업데이트 방법 선택 제공
+  const result = ui.alert(
+    '총 정리 표 업데이트',
+    '업데이트 방법을 선택하세요:\n\n' +
+    '[예] - 기존 시트의 집계표에서 데이터 추출\n' +
+    '[아니오] - 시트 재처리 후 업데이트\n' +
+    '[취소] - 작업 취소',
+    ui.ButtonSet.YES_NO_CANCEL
+  );
+  
+  if (result === ui.Button.YES) {
+    // 기존 시트에서 데이터 추출
+    updateSummaryTableFromSheets();
+  } else if (result === ui.Button.NO) {
+    // 시트 재처리 후 업데이트
+    reprocessAndUpdateSummaryTable();
+  } else {
+    console.log('사용자가 취소함');
+  }
+}
+
+// 시트 재처리 후 총 정리 표 업데이트
+function reprocessAndUpdateSummaryTable() {
+  console.log('\n' + '='.repeat(60));
+  console.log('🔄 ===== 시트 재처리 후 총 정리 표 업데이트 =====');
+  console.log('='.repeat(60));
+  
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const summarySheet = ss.getSheetByName('총 정리 표');
+  
+  if (!summarySheet) {
+    SpreadsheetApp.getUi().alert('총 정리 표 시트가 없습니다.');
+    return;
+  }
+  
+  // 3행의 헤더 읽기
+  const headers = summarySheet.getRange(3, 2, 1, 3).getValues()[0];
+  console.log('\n📋 총 정리 표 헤더:');
+  headers.forEach((h, i) => {
+    console.log(`  ${String.fromCharCode(66 + i)}3: "${h}"`);
+  });
+  
+  // 헤더 파싱
+  const headerInfo = parseHeadersImproved(headers);
+  
+  // 처리할 시트 찾기
+  const sheetsToProcess = findSheetsForHeaders(ss, headerInfo);
+  
+  if (sheetsToProcess.length === 0) {
+    SpreadsheetApp.getUi().alert('처리할 시트를 찾을 수 없습니다.');
+    return;
+  }
+  
+  console.log('\n📄 처리할 시트:');
+  sheetsToProcess.forEach(s => console.log(`  - ${s.name}`));
+  
+  // 시트 처리
+  const processedData = {};
+  sheetsToProcess.forEach(sheetInfo => {
+    try {
+      console.log(`\n처리 중: ${sheetInfo.name}`);
+      const sheet = ss.getSheetByName(sheetInfo.name);
+      if (sheet) {
+        processedData[sheetInfo.name] = processSheet(sheet);
+      }
+    } catch (error) {
+      console.error(`${sheetInfo.name} 처리 실패: ${error.toString()}`);
+    }
+  });
+  
+  // 총 정리 표 업데이트
+  updateSummaryTable(processedData);
+  
+  SpreadsheetApp.getUi().alert('총 정리 표 업데이트가 완료되었습니다.');
+}
+
+// 개선된 헤더 파싱 함수
+function parseHeadersImproved(headers) {
+  const headerInfo = [];
+  const currentDate = new Date();
+  const currentYear = currentDate.getFullYear();
+  
+  headers.forEach((header, index) => {
+    if (!header) {
+      headerInfo.push(null);
+      return;
+    }
+    
+    const headerStr = header.toString().trim();
+    console.log(`\n  헤더 파싱 중: "${headerStr}"`);
+    
+    let parsed = null;
+    
+    // 다양한 형식 처리
+    // "7월" 형식
+    if (headerStr.match(/^(\d{1,2})월$/)) {
+      const month = parseInt(RegExp.$1);
+      // 현재 월보다 크면 작년으로 판단
+      const year = month > currentDate.getMonth() + 1 ? currentYear - 1 : currentYear;
+      parsed = { year: year, month: month, original: headerStr };
+      console.log(`    → ${year}년 ${month}월로 파싱 (단순 월)}`);
+    }
+    // "24년 7월" 형식
+    else if (headerStr.match(/^(\d{2})년\s*(\d{1,2})월$/)) {
+      const yearPart = parseInt(RegExp.$1);
+      const month = parseInt(RegExp.$2);
+      // 2000년대로 가정
+      const year = yearPart < 50 ? 2000 + yearPart : 1900 + yearPart;
+      parsed = { year: year, month: month, original: headerStr };
+      console.log(`    → ${year}년 ${month}월로 파싱 (2자리 연도)`);
+    }
+    // "2024년 7월" 형식
+    else if (headerStr.match(/^(\d{4})년\s*(\d{1,2})월$/)) {
+      const year = parseInt(RegExp.$1);
+      const month = parseInt(RegExp.$2);
+      parsed = { year: year, month: month, original: headerStr };
+      console.log(`    → ${year}년 ${month}월로 파싱 (4자리 연도)`);
+    }
+    // "2024.7" 또는 "2024/7" 형식
+    else if (headerStr.match(/^(\d{4})[.\/](\d{1,2})$/)) {
+      const year = parseInt(RegExp.$1);
+      const month = parseInt(RegExp.$2);
+      parsed = { year: year, month: month, original: headerStr };
+      console.log(`    → ${year}년 ${month}월로 파싱 (구분자 형식)`);
+    }
+    else {
+      console.log(`    → 파싱 실패`);
+    }
+    
+    headerInfo.push(parsed);
+  });
+  
+  return headerInfo;
+}
+
+// 헤더에 맞는 시트 찾기
+function findSheetsForHeaders(ss, headerInfo) {
+  const sheets = [];
+  const allSheets = ss.getSheets();
+  
+  headerInfo.forEach(header => {
+    if (!header) return;
+    
+    // 축산과 생수 시트 모두 찾기
+    ['축산', '생수'].forEach(type => {
+      const sheetName = `${header.year}년 ${header.month}월 (${type})`;
+      const sheet = allSheets.find(s => {
+        const name = s.getName();
+        // 정확한 매칭 또는 공백 차이 허용
+        return name === sheetName || 
+               name.replace(/\s+/g, '') === sheetName.replace(/\s+/g, '');
+      });
+      
+      if (sheet) {
+        sheets.push({
+          name: sheet.getName(),
+          year: header.year,
+          month: header.month,
+          type: type
+        });
+      }
+    });
+  });
+  
+  return sheets;
+}
+
+
+
+// 날짜 형식 관련 함수들은 필요한 경우 추가...
