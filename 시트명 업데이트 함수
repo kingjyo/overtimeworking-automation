@@ -1,0 +1,72 @@
+/**
+ * 한 달씩 모든 시트명 자동 업데이트 (형식: "YYYY년 M월 (분류)")
+ * 최신월 기준으로 순차적으로 업데이트
+ * 
+ * 최신월/년도/분류명 등은 직접 입력 또는 자동 추출 가능
+ */
+function updateSheetNamesToNextMonth() {
+  // 1. 최신월 기준 설정
+  // 가장 앞 시트명을 기준으로 연,월,분류 추출 (예: "2025년 7월 (축산)")
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheets = ss.getSheets();
+  if (sheets.length < 1) return;
+  
+  // 예시: "2025년 7월 (축산)"에서 연, 월, 분류 추출
+  var pattern = /^(\d{4})년 (\d{1,2})월 \((.+)\)$/;
+  // (각 분류마다 최신월 시트가 앞으로 오는 구조로 가정)
+
+  // 분류별로 최신 연월 자동 인식
+  var categoryMap = {};
+  for (var i=0; i<sheets.length; i++) {
+    var name = sheets[i].getName();
+    var m = name.match(pattern);
+    if (!m) continue;
+    var year = Number(m[1]);
+    var month = Number(m[2]);
+    var category = m[3];
+
+    // 최신 연월 자동 갱신
+    if (!(category in categoryMap) ||
+        year > categoryMap[category].year ||
+        (year === categoryMap[category].year && month > categoryMap[category].month)) {
+      categoryMap[category] = {year: year, month: month};
+    }
+  }
+
+  // 2. 모든 시트를 한 칸씩 미래로 옮기기
+  for (var i=0; i<sheets.length; i++) {
+    var name = sheets[i].getName();
+    var m = name.match(pattern);
+    if (!m) continue;
+    var year = Number(m[1]);
+    var month = Number(m[2]);
+    var category = m[3];
+
+    // 해당 분류의 최신 연월부터 1월씩 뒤로 가기
+    // 최신 → 다음달, 두번째 → 최신, ... 이런 방식
+    var catBase = categoryMap[category];
+    // (최신이 맨 위에, 두번째가 최신-1월 ... 이런 식이면)
+    // (시트 순서에 따라 연산 필요하면 추가)
+    // 최신에서 1씩 빼서 자신의 위치 계산
+    var idx = 0;
+    for (var j=0; j<sheets.length; j++) {
+      if (sheets[j].getName().match(pattern) && sheets[j].getName().endsWith('(' + category + ')')) {
+        if (sheets[j].getName() == name) break;
+        idx++;
+      }
+    }
+    // idx=0이면 최신, idx=1이면 두번째, idx=2이면 세번째(24년 ...)
+    var newMonth = catBase.month + idx + 1;
+    var newYear = catBase.year;
+    if (newMonth > 12) {
+      newYear += Math.floor((newMonth-1)/12);
+      newMonth = ((newMonth-1)%12)+1;
+    }
+
+    var newSheetName = newYear + "년 " + newMonth + "월 (" + category + ")";
+    // 이름이 이미 새 이름이면 패스
+    if (name !== newSheetName) {
+      sheets[i].setName(newSheetName);
+    }
+  }
+}
