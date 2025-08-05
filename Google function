@@ -1,0 +1,12 @@
+function FIRST_SHEETNAME() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheets = ss.getSheets();
+  return sheets.length ? sheets[0].getName() : '';
+}
+
+function NTH_SHEETNAME(n) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheets = ss.getSheets();
+  if (n < 1 || n > sheets.length) return '';
+  return sheets[n-1].getName();
+}
